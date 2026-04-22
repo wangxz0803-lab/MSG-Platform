@@ -1,0 +1,36 @@
+# =============================================================================
+# MSG-Embedding — Top-level Hydra Config
+# =============================================================================
+#
+# This file is the root Hydra config. It pulls in the four main config groups
+# (data / model / train / eval / infer) via the `defaults` list below.
+#
+# Usage (Python):
+#     from msg_embedding.utils.config import load_config
+#     cfg = load_config()                                   # default compose
+#     cfg = load_config(overrides=["train.batch_size=64"])  # with overrides
+#
+# Usage (CLI, once a Hydra entry-point exists):
+#     python -m msg_embedding.cli.train train.epochs=100 model.dropout_p=0.2
+#
+# Notes:
+#   * PROTOCOL_SPEC lives in src/msg_embedding/utils/protocol_spec.py — it is
+#     too structured (nested dicts with tuples, mixed types) for clean YAML and
+#     is imported programmatically, not configured by end users.
+#   * Field-level comments inside each group YAML document the physical meaning
+#     of each constant (3GPP TS 38.214 / 38.133 context).
+# =============================================================================
+
+defaults:
+  - data: default
+  - model: default
+  - train: default
+  - eval: default
+  - infer: default
+  - _self_
+
+# Project-wide metadata (not part of any group — lives at the top level)
+project:
+  name: msg_embedding
+  version: "0.3.0-dev"
+  seed: 42  # global RNG seed; set to null to disable deterministic mode

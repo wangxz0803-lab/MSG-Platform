@@ -1,0 +1,64 @@
+# =============================================================================
+# train/default.yaml — Pre-training & online-training hyper-parameters
+# =============================================================================
+# Current values are tuned for *smoke testing* on a single-GPU dev box.
+# Production runs should override via CLI or a dedicated `train/production.yaml`.
+# =============================================================================
+
+# ---- Core optimizer schedule ----
+epochs: 20                      # SMOKE-TEST value; production recommended: 100
+warmup_epochs: 3                # linear warmup span at the start of training
+batch_size: 32                  # per-device batch size
+gradient_accumulation_steps: 2  # effective batch = batch_size * this
+learning_rate: 1.0e-4           # peak LR after warmup
+min_learning_rate: 1.0e-6       # floor for cosine / linear decay
+early_stop_patience: 15         # epochs without val-loss improvement before stop
+val_split: 0.1                  # fraction of training set held out for validation
+
+# ---- Loss weight schedule (recon_weight, contrastive_weight per phase) ----
+# Each entry: [end_fraction, recon_weight, contrastive_weight]
+# end_fraction is relative to total epochs (0.0-1.0). Last entry covers remaining.
+loss_weight_schedule:
+  - [0.1, 1.5, 0.2]
+  - [0.3, 1.0, 0.5]
+  - [1.0, 0.8, 1.0]
+
+# ---- Pre-training feature flags ----
+use_snr_condition: true         # condition encoder on SNR metadata
+use_feature_weighting: true     # apply per-feature loss weights (see recon_weights)
+use_multi_scale_mask: true      # cycle through mask_ratios below during training
+
+# Multi-scale mask schedule (used when use_multi_scale_mask = true)
+mask_ratios: [0.15, 0.3, 0.5]
+
+# ---- Reconstruction loss weights (per target feature) ----
+# Higher weight => the feature contributes more to the MAE recon loss.
+recon_weights:
+  pdp_crop: 1.0
+  srs1: 2.0
+  srs2: 2.0
+  srs3: 2.0
+  srs4: 2.0
+  pmi1: 1.5
+  pmi2: 1.5
+  pmi3: 1.5
+  pmi4: 1.5
+  dft1: 1.0
+  dft2: 1.0
+  dft3: 1.0
+  dft4: 1.0
+  rsrp_srs: 1.0
+  rsrp_cb: 1.0
+  cell_rsrp: 0.5
+
+# ---- Dual-view perturbation (contrastive augmentation) ----
+perturb_gauss: 1.0e-3   # additive Gaussian noise std
+perturb_scale: 0.05     # multiplicative scale jitter magnitude
+perturb_shift: 0.02     # additive bias jitter magnitude
+
+# ---- Online (post-train) adaptation ----
+online:
+  epochs: 15
+  learning_rate: 5.0e-5
+  use_adapter: true       # enable LoRA-style adapter layers
+  use_regularization: true # anchor toward pre-trained weights (EWC-like)

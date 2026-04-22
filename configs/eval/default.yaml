@@ -1,0 +1,10 @@
+# =============================================================================
+# eval/default.yaml — Evaluation settings (PLACEHOLDER STUB)
+# =============================================================================
+# This file is a stub. Concrete evaluation config will land in a later phase
+# once the eval harness (src/msg_embedding/eval/) is implemented. Keep the
+# file present so Hydra's defaults list resolves cleanly.
+# =============================================================================
+
+# Placeholder — intentionally empty body beyond this marker.
+enabled: false

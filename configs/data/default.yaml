@@ -1,0 +1,45 @@
+# =============================================================================
+# data/default.yaml — Hardware / antenna / data-shape constants
+# =============================================================================
+# Source of truth: 3GPP TS 38.214, 38.133, 38.213.
+# These constants describe the physical layer topology the dataset comes from,
+# not model hyper-params. Change them only when the data-generation pipeline
+# changes (e.g. switching from 64T to 128T Massive MIMO).
+# =============================================================================
+
+# ---- Transmit antennas (gNB side) ----
+tx_ant_num_min: 4     # minimum supported TX antenna count
+tx_ant_num_max: 64    # maximum supported TX antenna count (extended for Massive MIMO)
+
+# ---- Receive antennas (UE side) ----
+ue_rx_ant_num_min: 1
+ue_rx_ant_num_max: 8
+ue_tx_ant_num_min: 1
+ue_tx_ant_num_max: 8
+
+# ---- Stream / flow count ----
+flow_num: 4           # number of spatial streams used across SRS/PMI/DFT features
+
+# ---- Cell-level features ----
+cell_rsrp_dim: 16     # fixed number of neighbor cells tracked for RSRP vector
+
+# ---- Reconstruction target list (consumed by MAE pre-training) ----
+# Kept in the *data* group because the feature set is an attribute of the
+# dataset schema, not the model architecture.
+reconstruction_features:
+  - pdp_crop
+  - srs1
+  - srs2
+  - srs3
+  - srs4
+  - pmi1
+  - pmi2
+  - pmi3
+  - pmi4
+  - dft1
+  - dft2
+  - dft3
+  - dft4
+  - rsrp_srs
+  - rsrp_cb
+  - cell_rsrp

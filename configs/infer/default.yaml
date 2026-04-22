@@ -1,0 +1,43 @@
+# =============================================================================
+# infer/default.yaml — Inference settings (Phase 5)
+# =============================================================================
+# Consumed by:
+#   scripts/run_infer.py   -> BatchInferenceRunner
+#   scripts/run_export.py  -> ONNX / TorchScript exporters + metadata
+#
+# Common overrides:
+#   infer.ckpt=artifacts/<run>/ckpt_best.pth
+#   infer.input=bridge_out/                # directory of .pt files
+#   infer.output=artifacts/<run>/embeddings.parquet
+#   infer.batch_size=64
+#   infer.half=true                        # only honoured on CUDA
+#
+# Export overrides:
+#   export.ckpt=artifacts/<run>/ckpt_best.pth
+#   export.output_dir=artifacts/<run>/deploy/
+# =============================================================================
+
+enabled: true
+
+# Runtime parameters --------------------------------------------------------
+ckpt: null                  # Path to a CheckpointManager payload or raw state dict.
+input: null                 # Directory containing bridge .pt files OR a manifest parquet.
+output: null                # Target .parquet file for embeddings.
+batch_size: 64
+num_workers: 0
+device: cpu                 # "cpu" / "cuda" / "cuda:0". Falls back to CPU if CUDA missing.
+half: false                 # Enable fp16 autocast (CUDA only).
+use_adapter: false          # Engage the online latent adapter.
+glob: "*.pt"                # Pattern used to locate .pt files under input/.
+
+# Export parameters ---------------------------------------------------------
+export:
+  ckpt: null
+  output_dir: null
+  opset: 17
+  dynamic_batch: true
+  validate: true            # Runs onnxruntime check; skipped if ort missing.
+  emit_onnx: true
+  emit_torchscript: true
+  torchscript_method: trace # "trace" or "script".
+  use_adapter: false

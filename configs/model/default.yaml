@@ -1,0 +1,28 @@
+# =============================================================================
+# model/default.yaml — Transformer / MAE architecture hyper-parameters
+# =============================================================================
+# These control the *model* shape. Tune based on dataset size and compute
+# budget; see inline recommendations per field.
+# =============================================================================
+
+# ---- Token / sequence dimensions ----
+seq_len: 16           # per-sample token sequence length
+token_dim: 128        # per-token embedding dimension (must be divisible by n_heads)
+latent_dim: 256       # bottleneck / latent channel dimension
+
+# ---- Transformer core parameters ----
+n_heads: 8            # attention heads; recommended 4 / 8 / 16 (must divide token_dim)
+encoder_layers: 4     # encoder depth; recommended 4 / 6 / 8 (increase for larger data)
+decoder_layers: 2     # decoder depth; rule of thumb: encoder_layers // 2
+
+ff_dim: 512           # feed-forward hidden dim; recommended 2*token_dim ~ 4*token_dim
+dropout_p: 0.1        # dropout rate; raise to ~0.2 for small datasets
+
+# ---- Masking (base values; train group carries the multi-scale list) ----
+mask_ratio: 0.3       # base MAE mask ratio
+mask_ratio_v2: 0.2    # alternate mask ratio used by v2 path
+
+# ---- Output / regularization ----
+latent_out_dim: 16                # final projection dim for the latent head
+use_ground_truth_for_recon: true  # teacher-forcing for reconstruction decoder
+norm_eps: 1.0e-8                  # LayerNorm / BatchNorm epsilon

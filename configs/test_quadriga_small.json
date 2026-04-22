@@ -1,0 +1,18 @@
+{
+    "num_cells": 3,
+    "num_ues": 5,
+    "num_snapshots": 14,
+    "carrier_freq_hz": 3.5e9,
+    "scenario": "3GPP_38.901_UMa_NLOS",
+    "isd_m": 500,
+    "tx_height_m": 25,
+    "rx_height_m": 1.5,
+    "cell_radius_m": 200,
+    "ue_speed_kmh": 3,
+    "bs_ant_v": 1,
+    "bs_ant_h": 2,
+    "ue_ant_v": 1,
+    "ue_ant_h": 2,
+    "output_dir": "D:/MSG/test_mat_output",
+    "seed": 42
+}

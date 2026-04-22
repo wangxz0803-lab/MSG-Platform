@@ -1,0 +1,59 @@
+# =============================================================================
+# data/sionna_rt.yaml — Sionna 2.0 Ray Tracing data source (Phase 1.5)
+# =============================================================================
+# Feeds the `sionna_rt` DataSource. Requires Sionna 2.0.1 + PyTorch 2.9+ + CUDA.
+# When Sionna is not installed, swap `source: sionna_rt` → `source: sionna_rt_mock`
+# for structural testing; see `docs/phase1_5_sionna_setup.md`.
+# =============================================================================
+
+source: sionna_rt
+
+# ---- Scene selection ----
+scenario: munich            # 'munich' | 'etoile' | 'custom_osm'
+# osm_path: configs/osm/my_scene.xml   # required when scenario == 'custom_osm'
+
+# ---- Cell / UE counts ----
+num_cells: 7
+num_ues: 50
+num_samples: 100            # how many ChannelSamples to yield
+serving_cell_id: 0
+
+# ---- Topology ----
+num_sites: 7                # alias for num_cells; preferred by frontend
+isd_m: 500.0                # inter-site distance in metres
+sectors_per_site: 3         # 1 (omni) | 3 (tri-sector)
+tx_height_m: 25.0           # BS antenna height in metres
+
+# ---- OFDM grid (3GPP NR, 100 MHz @ 30 kHz SCS, 273 RB) ----
+carrier_freq_hz: 3.5e9
+bandwidth_hz: 100e6
+fft_size: 1024
+num_ofdm_symbols: 14
+subcarrier_spacing: 30e3
+
+# ---- Antenna arrays (split TX/RX — Sionna uses max(tx,rx) globally) ----
+num_bs_ant: 4               # legacy key, kept for backward compat
+num_ue_ant: 2               # legacy key, kept for backward compat
+num_bs_tx_ant: 64           # BS transmit antennas
+num_bs_rx_ant: 64           # BS receive antennas
+num_ue_tx_ant: 2            # UE transmit antennas
+num_ue_rx_ant: 4            # UE receive antennas
+
+# ---- UE configuration ----
+ue_speed_kmh: 3.0           # UE mobility speed in km/h
+ue_distribution: uniform    # 'uniform' | 'clustered' | 'hotspot'
+
+# ---- Power ----
+# If omitted or null, TX power is set per-scenario: UMa=43, UMi=33, InF=24 dBm.
+# Explicit value here overrides the scenario default.
+tx_power_dbm: 43.0          # BS transmit power in dBm (null → scenario default)
+
+# ---- Reference signal + channel estimation ----
+pilot_type: csi_rs_gold     # 'srs_zc' (UL) | 'csi_rs_gold' (DL)
+pilot_type_dl: csi_rs_gold  # DL pilot type (used when link == 'both')
+pilot_type_ul: srs_zc       # UL pilot type (used when link == 'both')
+channel_est_mode: ls_linear # 'ideal' | 'ls_linear' | 'ls_mmse'
+link: DL                    # 'UL' | 'DL' | 'both'
+
+# ---- Runtime ----
+device: cuda                # 'cpu' | 'cuda'
