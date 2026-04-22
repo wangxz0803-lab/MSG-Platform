@@ -74,6 +74,8 @@ ignore = ["E501"]
 "**/__init__.py" = ["F401"]
 "platform/backend/routes/**" = ["B008"]
 "platform/backend/services/**" = ["SIM105"]
+"src/msg_embedding/data/parallel.py" = ["SIM105"]
+"src/msg_embedding/data/webdataset_shard.py" = ["SIM115"]
 
 [tool.black]
 line-length = 100
