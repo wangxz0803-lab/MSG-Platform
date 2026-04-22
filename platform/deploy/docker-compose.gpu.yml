@@ -1,0 +1,25 @@
+# GPU override: run the worker on an NVIDIA runtime with CUDA torch.
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+
+services:
+  worker:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.worker
+      args:
+        BASE_IMAGE: "nvidia/cuda:12.1.0-runtime-ubuntu22.04"
+        REQUIREMENTS_FILE: "requirements/worker-gpu.txt"
+    image: msg-embedding/worker-gpu:latest
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+      CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,0 +1,31 @@
+# Dev override: hot-reload for backend, extra logging, published Redis port.
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  redis:
+    ports:
+      - "6379:6379"
+
+  api:
+    environment:
+      UVICORN_RELOAD: "1"
+      LOG_LEVEL: "debug"
+    command: >
+      sh -c '
+      until redis-cli -h redis -a "${REDIS_PASSWORD:-}" ping > /dev/null 2>&1; do sleep 1; done;
+      exec uvicorn platform.backend.main:app
+        --host 0.0.0.0 --port 8000 --reload
+        --reload-dir /app/platform/backend
+      '
+
+  worker:
+    environment:
+      LOG_LEVEL: "debug"
+      WORKER_PROCESSES: "1"
+      WORKER_THREADS: "2"
+
+  frontend:
+    ports:
+      - "3001:80"

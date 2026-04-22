@@ -1,0 +1,125 @@
+# MSG-Embedding research platform - docker-compose orchestration (CPU default)
+
+name: msg-embedding
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: msg_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass "${REDIS_PASSWORD:-}"
+    volumes:
+      - redis_data:/data
+    networks:
+      - msg_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.api
+    image: msg-embedding/api:latest
+    container_name: msg_api
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
+      DB_URL: "sqlite:////data/msg.db"
+      DATA_DIR: "/data/bridge_out"
+      ARTIFACTS_DIR: "/data/artifacts"
+      REPORTS_DIR: "/data/reports"
+      WORKER_QUEUE_DIR: "/queue"
+      WORKER_LOGS_DIR: "/worker_logs"
+      WORKER_PROGRESS_DIR: "/progress"
+      WORKER_CANCEL_DIR: "/cancel"
+      PYTHONPATH: "/app:/app/src"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - "${MSG_REPO_PATH}:/app"
+      - "${MSG_REPO_PATH}/bridge_out:/data/bridge_out"
+      - "${MSG_REPO_PATH}/artifacts:/data/artifacts"
+      - "${MSG_REPO_PATH}/reports:/data/reports"
+      - "${MSG_REPO_PATH}/platform/backend/msg.db:/data/msg.db"
+      - "${MSG_REPO_PATH}/platform/worker/queue:/queue"
+      - "${MSG_REPO_PATH}/platform/worker/logs:/worker_logs"
+      - "${MSG_REPO_PATH}/platform/worker/progress:/progress"
+      - "${MSG_REPO_PATH}/platform/worker/cancel:/cancel"
+    ports:
+      - "8000:8000"
+    networks:
+      - msg_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    command: ["/entrypoints/api.sh"]
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.worker
+    image: msg-embedding/worker:latest
+    container_name: msg_worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/0"
+      DB_URL: "sqlite:////data/msg.db"
+      WORKER_QUEUE_DIR: "/queue"
+      WORKER_LOGS_DIR: "/worker_logs"
+      WORKER_PROGRESS_DIR: "/progress"
+      WORKER_CANCEL_DIR: "/cancel"
+      WORKER_PROCESSES: "2"
+      WORKER_THREADS: "4"
+      PYTHONPATH: "/app:/app/src"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - "${MSG_REPO_PATH}:/app"
+      - "${MSG_REPO_PATH}/bridge_out:/data/bridge_out"
+      - "${MSG_REPO_PATH}/artifacts:/data/artifacts"
+      - "${MSG_REPO_PATH}/reports:/data/reports"
+      - "${MSG_REPO_PATH}/platform/backend/msg.db:/data/msg.db"
+      - "${MSG_REPO_PATH}/platform/worker/queue:/queue"
+      - "${MSG_REPO_PATH}/platform/worker/logs:/worker_logs"
+      - "${MSG_REPO_PATH}/platform/worker/progress:/progress"
+      - "${MSG_REPO_PATH}/platform/worker/cancel:/cancel"
+    networks:
+      - msg_net
+    command: ["/entrypoints/worker.sh"]
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.frontend
+    image: msg-embedding/frontend:latest
+    container_name: msg_frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+    networks:
+      - msg_net
+
+networks:
+  msg_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
