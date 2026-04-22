@@ -1,0 +1,51 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      target: api
+    ports:
+      - "${MSG_API_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      MSG_REDIS_URL: redis://redis:6379/0
+      MSG_DB_URL: sqlite:///data/msg.db
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+      - ./bridge_out:/app/bridge_out
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file: .env
+    environment:
+      MSG_REDIS_URL: redis://redis:6379/0
+      MSG_DB_URL: sqlite:///data/msg.db
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+      - ./bridge_out:/app/bridge_out
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:
