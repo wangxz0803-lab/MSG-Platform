@@ -64,7 +64,7 @@ class DatasetCollectRequest(BaseModel):
     """Payload for ``POST /api/datasets/collect``."""
 
     source: Literal[
-        "quadriga_multi", "quadriga_real", "sionna_rt", "internal_sim", "internal_upload"
+        "quadriga_real", "sionna_rt", "internal_sim", "internal_upload"
     ]
     config_overrides: dict[str, Any] = Field(default_factory=dict)
     output_dir: str | None = None

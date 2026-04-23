@@ -57,8 +57,6 @@ LinkType = Literal["UL", "DL"]
 LinkPairing = Literal["single", "paired"]
 ChannelEstMode = Literal["ideal", "ls_linear", "ls_mmse"]
 SourceType = Literal[
-    "quadriga_single_legacy",
-    "quadriga_multi",
     "quadriga_real",
     "sionna_rt",
     "internal_sim",

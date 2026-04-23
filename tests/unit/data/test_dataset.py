@@ -15,7 +15,7 @@ def test_len_matches_filtered_manifest(tmp_path, make_sample, write_sample_pt) -
     m = Manifest(tmp_path / "m.parquet")
     rows = []
     for i in range(5):
-        sample = make_sample(source="quadriga_multi")
+        sample = make_sample(source="internal_sim")
         path = write_sample_pt(sample, f"s{i}.pt")
         rows.append(
             {
@@ -40,7 +40,7 @@ def test_len_matches_filtered_manifest(tmp_path, make_sample, write_sample_pt) -
 def test_source_filter(tmp_path, make_sample, write_sample_pt) -> None:
     m = Manifest(tmp_path / "m.parquet")
     rows = []
-    for i, src in enumerate(["quadriga_multi", "sionna_rt", "quadriga_multi", "internal_sim"]):
+    for i, src in enumerate(["quadriga_real", "sionna_rt", "quadriga_real", "internal_sim"]):
         sample = make_sample(source=src)
         path = write_sample_pt(sample, f"s{i}.pt")
         rows.append(
@@ -58,10 +58,10 @@ def test_source_filter(tmp_path, make_sample, write_sample_pt) -> None:
     ds_all = ChannelDataset(m, split="train", source_filter=None)
     assert len(ds_all) == 4
 
-    ds_multi = ChannelDataset(m, split="train", source_filter=["quadriga_multi"])
-    assert len(ds_multi) == 2
+    ds_real = ChannelDataset(m, split="train", source_filter=["quadriga_real"])
+    assert len(ds_real) == 2
 
-    ds_two = ChannelDataset(m, split="train", source_filter=["quadriga_multi", "sionna_rt"])
+    ds_two = ChannelDataset(m, split="train", source_filter=["quadriga_real", "sionna_rt"])
     assert len(ds_two) == 3
 
 

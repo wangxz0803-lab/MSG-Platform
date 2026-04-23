@@ -46,7 +46,7 @@ class DataSource(abc.ABC):
     override :meth:`validate_config` to fail fast on malformed configs.
     """
 
-    #: Unique lookup key used by the registry (e.g. ``"quadriga_multi"``).
+    #: Unique lookup key used by the registry (e.g. ``"quadriga_real"``).
     name: ClassVar[str] = ""
 
     def __init__(self, config: DictConfig) -> None:

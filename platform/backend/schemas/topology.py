@@ -44,7 +44,7 @@ class TopologyPreviewResponse(BaseModel):
 class CollectConfig(BaseModel):
     """Rich collect configuration."""
 
-    source: Literal["quadriga_multi", "sionna_rt", "internal_upload"] = "sionna_rt"
+    source: Literal["quadriga_real", "sionna_rt", "internal_sim", "internal_upload"] = "sionna_rt"
     num_sites: int = Field(default=7, ge=1, le=57)
     isd_m: float = Field(default=500.0, ge=50, le=5000)
     sectors_per_site: int = Field(default=3, ge=1, le=6)

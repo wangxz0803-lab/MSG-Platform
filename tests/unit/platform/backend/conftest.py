@@ -95,7 +95,7 @@ def fake_manifest(tmp_path: Path) -> Path | None:
         [
             {
                 "uuid": "u-1",
-                "source": "quadriga_multi",
+                "source": "internal_sim",
                 "shard_id": 0,
                 "sample_id": 1,
                 "status": "ready",
@@ -111,7 +111,7 @@ def fake_manifest(tmp_path: Path) -> Path | None:
             },
             {
                 "uuid": "u-2",
-                "source": "quadriga_multi",
+                "source": "internal_sim",
                 "shard_id": 0,
                 "sample_id": 2,
                 "status": "ready",

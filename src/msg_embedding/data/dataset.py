@@ -43,7 +43,7 @@ class ChannelDataset(_TorchDataset):
         Which split to serve (``train`` / ``val`` / ``test`` / ``unassigned`` /
         ``"all"`` to disable filtering).
     source_filter :
-        Optional list of source names (e.g. ``['quadriga_multi', 'sionna_rt']``)
+        Optional list of source names (e.g. ``['quadriga_real', 'sionna_rt']``)
         to restrict to. ``None`` = all sources.
     link_filter :
         ``'UL'``, ``'DL'``, or ``'both'``.

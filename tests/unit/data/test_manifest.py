@@ -56,14 +56,14 @@ def test_new_manifest_is_empty(tmp_path) -> None:
 def test_append_and_query(tmp_path, manifest_row_factory) -> None:
     m = Manifest(tmp_path / "m.parquet")
     rows = [manifest_row_factory(source="sionna_rt") for _ in range(3)]
-    rows += [manifest_row_factory(source="quadriga_multi") for _ in range(2)]
+    rows += [manifest_row_factory(source="quadriga_real") for _ in range(2)]
     m.append(rows)
     assert len(m) == 5
 
     sionna = m.query(source="sionna_rt")
     assert len(sionna) == 3
 
-    multi_src = m.query(source=["sionna_rt", "quadriga_multi"])
+    multi_src = m.query(source=["sionna_rt", "quadriga_real"])
     assert len(multi_src) == 5
 
     with pytest.raises(ValueError):

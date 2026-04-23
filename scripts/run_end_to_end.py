@@ -339,7 +339,7 @@ if __name__ == "__main__":
     collect_dirs = {
         "internal_sim": _PROJECT_ROOT / "artifacts" / "collect_internal_sim_fast",
         "sionna_rt": _PROJECT_ROOT / "artifacts" / "collect_sionna_rt",
-        "quadriga_multi": _PROJECT_ROOT / "artifacts" / "collect_quadriga_multi",
+        "quadriga_real": _PROJECT_ROOT / "artifacts" / "collect_quadriga_real",
     }
 
     bridge_out = _PROJECT_ROOT / "artifacts" / "bridge_out_5k"

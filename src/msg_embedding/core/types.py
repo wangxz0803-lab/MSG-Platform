@@ -26,7 +26,6 @@ class ChannelEstMode(str, Enum):
 class SourceType(str, Enum):
     INTERNAL_SIM = "internal_sim"
     SIONNA_RT = "sionna_rt"
-    QUADRIGA_MULTI = "quadriga_multi"
     QUADRIGA_REAL = "quadriga_real"
     FIELD = "field"
 

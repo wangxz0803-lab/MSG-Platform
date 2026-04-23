@@ -15,7 +15,7 @@ from msg_embedding.data.contract import ChannelSample
 
 def _make_sample(
     *,
-    source: str = "quadriga_multi",
+    source: str = "internal_sim",
     link: str = "UL",
     serving_cell_id: int = 0,
     channel_est_mode: str = "ls_linear",
@@ -79,7 +79,7 @@ def manifest_row_factory() -> Callable[..., dict]:
     def _row(
         *,
         uuid_: str | None = None,
-        source: str = "quadriga_multi",
+        source: str = "internal_sim",
         link: str = "UL",
         snr_dB: float = 10.0,
         sinr_dB: float = 3.0,

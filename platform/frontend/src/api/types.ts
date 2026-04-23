@@ -165,7 +165,7 @@ export interface BatchJobCreateResponse {
 }
 
 export interface CreateCollectRequest {
-  source: 'quadriga_multi' | 'quadriga_real' | 'sionna_rt' | 'internal_sim' | 'internal_upload';
+  source: 'quadriga_real' | 'sionna_rt' | 'internal_sim' | 'internal_upload';
   config_overrides?: Record<string, unknown>;
   output_dir?: string;
 }

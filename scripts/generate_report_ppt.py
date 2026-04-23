@@ -52,13 +52,11 @@ C_TABLE_ALT = RGBColor(0xE8, 0xEA, 0xF6)
 SOURCE_COLORS_HEX = {
     "internal_sim": "#1565C0",
     "sionna_rt": "#00897B",
-    "quadriga_multi": "#EF6C00",
     "quadriga_real": "#D84315",
 }
 SOURCE_LABELS = {
     "internal_sim": "Internal TDL",
     "sionna_rt": "Sionna RT",
-    "quadriga_multi": "QuaDRiGa (合成)",
     "quadriga_real": "QuaDRiGa (真实)",
 }
 

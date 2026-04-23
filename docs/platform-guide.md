@@ -12,8 +12,7 @@ MSG-Embedding 平台是 5G NR 信道表征学习系统的 Web 界面，基于 Fa
 |--------|------|------|
 | internal_sim | 3GPP 38.901 多小区统计模型 | 纯 Python |
 | sionna_rt | Sionna 射线追踪仿真 | GPU + Sionna 2.0 |
-| quadriga_multi | MATLAB 预生成 .mat 文件 | 无 |
-| quadriga_real | MATLAB 实时生成 | 本地 MATLAB |
+| quadriga_real | MATLAB 实时生成（QuaDRiGa 引擎） | 本地 MATLAB |
 | internal_upload | 上传已有数据（暂未实现） | - |
 
 ### 链路方向与配对模式
@@ -66,7 +65,6 @@ MSG-Embedding 平台是 5G NR 信道表征学习系统的 Web 界面，基于 Fa
 - internal_sim：Python 端完整轨迹建模 + 空间 LSP 相关
 - sionna_rt：Python 端轨迹 + Sionna RT 信道计算（或 TDL 回退）
 - quadriga_real：移动性参数传递给 MATLAB QuaDRiGa 引擎（原生轨迹支持）
-- quadriga_multi：数据中已包含移动性信息（由 MATLAB 预生成）
 
 ## 数据集管理
 

@@ -76,7 +76,7 @@ def _make_record(i: int, *, ue_xy: tuple[float, float] | None = None) -> dict[st
         "sinr_dB": float(5.0 + i * 0.1),
         "snr_dB": float(10.0 + i * 0.2),
         "link": "UL",
-        "source": "quadriga_multi",
+        "source": "internal_sim",
         "meta": {},
     }
     if ue_xy is not None:

@@ -39,7 +39,7 @@ const { Dragger } = Upload;
 // Constants
 // ---------------------------------------------------------------------------
 
-type DataSource = 'quadriga_multi' | 'quadriga_real' | 'sionna_rt' | 'internal_sim' | 'internal_upload';
+type DataSource = 'quadriga_real' | 'sionna_rt' | 'internal_sim' | 'internal_upload';
 
 interface SourceOption {
   key: DataSource;
@@ -50,12 +50,6 @@ interface SourceOption {
 }
 
 const SOURCE_OPTIONS: SourceOption[] = [
-  {
-    key: 'quadriga_multi',
-    title: 'QuaDRiGa',
-    description: '加载 MATLAB 预生成的 .mat 文件',
-    icon: <ThunderboltOutlined style={{ fontSize: 36 }} />,
-  },
   {
     key: 'quadriga_real',
     title: 'QuaDRiGa Real',
@@ -345,7 +339,7 @@ function pilotLabel(val: string): string {
   return map[val] ?? val;
 }
 function sourceLabel(val: string): string {
-  const map: Record<string, string> = { quadriga_multi: 'QuaDRiGa', quadriga_real: 'QuaDRiGa Real (MATLAB)', sionna_rt: 'Sionna RT', internal_sim: 'Python 内置仿真', internal_upload: '内部数据上传' };
+  const map: Record<string, string> = { quadriga_real: 'QuaDRiGa Real (MATLAB)', sionna_rt: 'Sionna RT', internal_sim: 'Python 内置仿真', internal_upload: '内部数据上传' };
   return map[val] ?? val;
 }
 function scenarioLabel(val: string): string {
@@ -365,8 +359,7 @@ export default function CollectWizard() {
   const [currentStep, setCurrentStep] = useState(0);
 
   // Step 1 state
-  const [source, setSource] = useState<DataSource>('quadriga_multi');
-  const [matDir, setMatDir] = useState('');
+  const [source, setSource] = useState<DataSource>('quadriga_real');
   const [qrConfig, setQrConfig] = useState<QuadrigaRealValues>(DEFAULT_QUADRIGA_REAL);
 
   // Step 2 state
@@ -439,7 +432,7 @@ export default function CollectWizard() {
     if (currentStep === 1) {
       if (source === 'quadriga_real') {
         scheduleQrPreview(qrConfig);
-      } else if (source !== 'quadriga_multi') {
+      } else {
         schedulePreview(topology, ueConfig);
       }
     }
@@ -480,13 +473,6 @@ export default function CollectWizard() {
         return true;
       }
       if (currentStep === 1) {
-        if (source === 'quadriga_multi') {
-          if (!matDir.trim()) {
-            message.warning('请输入 .mat 文件目录路径');
-            return false;
-          }
-          return true;
-        }
         if (source === 'quadriga_real') {
           await qrForm.validateFields();
           return true;
@@ -521,9 +507,7 @@ export default function CollectWizard() {
   const fullConfig = useMemo(() => {
     const config: Record<string, unknown> = {};
 
-    if (source === 'quadriga_multi') {
-      config.mat_dir = matDir;
-    } else if (source === 'quadriga_real') {
+    if (source === 'quadriga_real') {
       Object.assign(config, qrConfig);
     } else {
       Object.assign(config, topology, bsConfig, ueConfig);
@@ -555,16 +539,14 @@ export default function CollectWizard() {
         config.osm_path = channelConfig.osm_path;
       }
     }
-    if (source !== 'quadriga_multi') {
-      if (siteOverrides.length > 0) {
-        config.custom_site_positions = siteOverrides.map((s) => ({ x: s.x, y: s.y, z: s.z }));
-      }
-      if (ueOverrides.length > 0) {
-        config.custom_ue_positions = ueOverrides.map((u) => ({ x: u.x, y: u.y, z: u.z }));
-      }
+    if (siteOverrides.length > 0) {
+      config.custom_site_positions = siteOverrides.map((s) => ({ x: s.x, y: s.y, z: s.z }));
+    }
+    if (ueOverrides.length > 0) {
+      config.custom_ue_positions = ueOverrides.map((u) => ({ x: u.x, y: u.y, z: u.z }));
     }
     return config;
-  }, [topology, bsConfig, ueConfig, channelConfig, source, matDir, qrConfig, siteOverrides, ueOverrides]);
+  }, [topology, bsConfig, ueConfig, channelConfig, source, qrConfig, siteOverrides, ueOverrides]);
 
   // Submit
   const handleSubmit = useCallback(async () => {
@@ -601,7 +583,7 @@ export default function CollectWizard() {
         style={{ marginBottom: 32 }}
         items={[
           { title: '数据来源' },
-          { title: source === 'quadriga_multi' ? '数据加载配置' : source === 'quadriga_real' ? 'MATLAB 生成配置' : '组网与设备配置' },
+          { title: source === 'quadriga_real' ? 'MATLAB 生成配置' : '组网与设备配置' },
           { title: '信道配置' },
           { title: '确认提交' },
         ]}
@@ -682,30 +664,6 @@ export default function CollectWizard() {
             </Col>
           ))}
         </Row>
-      )}
-
-      {/* ====== Step 2: 数据加载配置 (quadriga_multi) ====== */}
-      {currentStep === 1 && source === 'quadriga_multi' && (
-        <Card title="QuaDRiGa 数据加载配置" style={{ maxWidth: 720 }}>
-          <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            QuaDRiGa 数据源从 MATLAB 生成的 .mat 文件中加载预计算的信道数据。
-            拓扑、天线和频率等参数已包含在 .mat 文件中，无需额外配置。
-          </Paragraph>
-          <Form layout="vertical">
-            <Form.Item
-              label="MAT 文件目录"
-              required
-              help="包含 QuaDRiGa 输出 .mat 文件的文件夹路径"
-              validateStatus={matDir.trim() ? 'success' : undefined}
-            >
-              <Input
-                value={matDir}
-                onChange={(e) => setMatDir(e.target.value)}
-                placeholder="例如：D:\quadriga_output\scenario_1"
-              />
-            </Form.Item>
-          </Form>
-        </Card>
       )}
 
       {/* ====== Step 2: MATLAB 生成配置 (quadriga_real) ====== */}
@@ -881,7 +839,7 @@ export default function CollectWizard() {
       )}
 
       {/* ====== Step 2: 组网与设备配置 (sionna_rt / internal_sim) ====== */}
-      {currentStep === 1 && source !== 'quadriga_multi' && source !== 'quadriga_real' && (
+      {currentStep === 1 && source !== 'quadriga_real' && (
         <Row gutter={24}>
           {/* LEFT: config forms */}
           <Col xs={24} lg={10}>
@@ -1374,23 +1332,14 @@ export default function CollectWizard() {
       {currentStep === 3 && (
         <Row gutter={24}>
           <Col xs={24} lg={12}>
-            <Card title={source === 'quadriga_multi' || source === 'quadriga_real' ? '数据源配置' : '拓扑与设备配置'} size="small" style={{ marginBottom: 16 }}>
+            <Card title={source === 'quadriga_real' ? '数据源配置' : '拓扑与设备配置'} size="small" style={{ marginBottom: 16 }}>
               <Descriptions column={1} size="small" bordered>
                 <Descriptions.Item label="数据来源">
                   {sourceLabel(source)}
                 </Descriptions.Item>
               </Descriptions>
 
-              {source === 'quadriga_multi' ? (
-                <>
-                  <Divider orientation="left" orientationMargin={0} style={{ margin: '12px 0' }}>
-                    数据加载
-                  </Divider>
-                  <Descriptions column={1} size="small" bordered>
-                    <Descriptions.Item label="MAT 文件目录">{matDir}</Descriptions.Item>
-                  </Descriptions>
-                </>
-              ) : source === 'quadriga_real' ? (
+              {source === 'quadriga_real' ? (
                 <>
                   <Divider orientation="left" orientationMargin={0} style={{ margin: '12px 0' }}>
                     MATLAB 生成配置
@@ -1545,8 +1494,7 @@ export default function CollectWizard() {
               </Descriptions>
             </Card>
 
-            {source !== 'quadriga_multi' && (
-              <Card title="拓扑预览" size="small">
+            <Card title="拓扑预览" size="small">
                 <div style={{ height: 280 }}>
                   <TopologyCanvas
                     sites={previewData?.sites ?? []}
@@ -1557,7 +1505,6 @@ export default function CollectWizard() {
                   />
                 </div>
               </Card>
-            )}
           </Col>
         </Row>
       )}
