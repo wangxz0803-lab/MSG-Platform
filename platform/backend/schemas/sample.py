@@ -20,6 +20,10 @@ class SampleSchema(BaseModel):
     snr_dB: float | None = Field(default=None, validation_alias="snr_db")
     sir_dB: float | None = Field(default=None, validation_alias="sir_db")
     sinr_dB: float | None = Field(default=None, validation_alias="sinr_db")
+    ul_sir_dB: float | None = Field(default=None, validation_alias="ul_sir_db")
+    dl_sir_dB: float | None = Field(default=None, validation_alias="dl_sir_db")
+    num_interfering_ues: int | None = None
+    link_pairing: Literal["single", "paired"] | None = Field(default="single")
     num_cells: int | None = None
     timestamp: datetime | None = Field(default=None, validation_alias="ts")
     status: str | None = None
@@ -36,7 +40,10 @@ class DatasetSummary(BaseModel):
     snr_std: float | None = None
     sir_mean: float | None = None
     sinr_mean: float | None = None
+    ul_sir_mean: float | None = None
+    dl_sir_mean: float | None = None
     links: list[str] = Field(default_factory=list)
+    has_paired: bool = False
 
 
 class DatasetListResponse(BaseModel):

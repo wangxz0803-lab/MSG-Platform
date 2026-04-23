@@ -26,7 +26,7 @@ class BackendSettings(BaseSettings):
     bridge_out_dir: str = Field(default=str(_MSG_REPO_ROOT / "bridge_out"))
     manifest_path: str = Field(default=str(_MSG_REPO_ROOT / "bridge_out" / "manifest.parquet"))
     db_url: str = Field(default=f"sqlite:///{_MSG_REPO_ROOT}/platform/backend/msg.db")
-    api_port: int = Field(default=8000)
+    api_port: int = Field(default=8001)
     worker_queue_dir: str = Field(
         default=str(_MSG_REPO_ROOT / "platform" / "worker" / "queue")
     )

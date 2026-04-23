@@ -12,6 +12,7 @@ export type JobType =
   | 'report'
   | 'simulate';
 export type LinkType = 'UL' | 'DL';
+export type LinkPairing = 'single' | 'paired';
 export type ModelFormat = 'pt' | 'onnx' | 'torchscript';
 
 export interface HealthResponse {
@@ -27,6 +28,10 @@ export interface Sample {
   snr_dB: number;
   sir_dB: number | null;
   sinr_dB: number | null;
+  ul_sir_dB: number | null;
+  dl_sir_dB: number | null;
+  num_interfering_ues: number | null;
+  link_pairing: LinkPairing;
   timestamp: string;
   tags: string[];
   meta?: Record<string, unknown>;
@@ -39,7 +44,10 @@ export interface DatasetSummary {
   snr_std: number;
   sir_mean: number | null;
   sinr_mean: number | null;
+  ul_sir_mean: number | null;
+  dl_sir_mean: number | null;
   links: LinkType[];
+  has_paired: boolean;
 }
 
 export interface DatasetsResponse {
@@ -234,12 +242,16 @@ export interface ChannelSampleMeta {
   snr_dB: number | null;
   sir_dB: number | null;
   sinr_dB: number | null;
+  ul_sir_dB: number | null;
+  dl_sir_dB: number | null;
   source: string;
   link: string;
+  link_pairing: LinkPairing | null;
   channel_est_mode: string;
   ue_position: number[] | null;
   ssb_rsrp_dBm: number[];
   serving_cell_id: number;
+  num_interfering_ues: number | null;
 }
 
 export interface ChannelListItem {

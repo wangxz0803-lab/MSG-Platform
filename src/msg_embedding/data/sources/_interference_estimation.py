@@ -247,10 +247,11 @@ def estimate_channel_with_interference(
         K_minus_1 = h_interferers.shape[0]
 
         if direction == "UL":
-            # UL: BS receives SRS from multiple UEs in the same cell.
-            # Each interfering UE transmits SRS with a different ZC root.
-            # h_interferers: [K-1, T, RB, BS_ant, UE_ant]
-            # We model num_interfering_ues UEs per interferer cell.
+            # UL: BS receives SRS from UEs in neighboring (inter-cell) cells.
+            # Intra-cell SRS is orthogonal (comb + cyclic shift); interference
+            # comes from neighboring cells whose SRS overlaps in time-freq.
+            # The number of active UEs per neighbor is randomized to model
+            # scheduling uncertainty (0 to num_interfering_ues).
             n_intf_total = 0
             for cell_k in range(K_minus_1):
                 h_intf_k = h_interferers[cell_k]  # [T, RB, BS_ant, UE_ant]
@@ -263,7 +264,8 @@ def estimate_channel_with_interference(
                     else serving_cell_id + cell_k + 1
                 )
 
-                for ue_idx in range(num_interfering_ues):
+                n_active_ues = int(rng.integers(0, num_interfering_ues + 1))
+                for ue_idx in range(n_active_ues):
                     intf_pilots = _generate_interferer_pilots_srs(
                         RB, intf_cell_id, ue_idx,
                     )
@@ -274,15 +276,23 @@ def estimate_channel_with_interference(
             logger.debug(
                 "ul_interference_injected",
                 num_interferer_cells=K_minus_1,
-                num_ues_per_cell=num_interfering_ues,
+                max_ues_per_cell=num_interfering_ues,
                 total_interfering_signals=n_intf_total,
             )
 
         else:
-            # DL: UE receives CSI-RS from multiple cells.
-            # Each interferer cell transmits CSI-RS with its own Gold-PRBS sequence.
-            # h_interferers: [K-1, T, RB, BS_ant, UE_ant]
-            for cell_k in range(K_minus_1):
+            # DL: UE receives CSI-RS from neighboring (inter-cell) cells.
+            # Intra-cell CSI-RS ports are orthogonal (CDM/FDM/TDM);
+            # interference comes from neighbors whose CSI-RS collides in
+            # time-freq. A random subset of neighbors is active per sample.
+            n_active_cells = int(rng.integers(0, K_minus_1 + 1))
+            active_cell_indices = (
+                rng.choice(K_minus_1, size=n_active_cells, replace=False)
+                if n_active_cells > 0
+                else np.array([], dtype=np.intp)
+            )
+
+            for cell_k in active_cell_indices:
                 h_intf_k = h_interferers[cell_k]
                 h_intf_at_pilots = h_intf_k[np.ix_(rs_time, rs_freq)]
                 h_intf_at_pilots = h_intf_at_pilots.transpose(1, 0, 2, 3)
@@ -299,7 +309,8 @@ def estimate_channel_with_interference(
 
             logger.debug(
                 "dl_interference_injected",
-                num_interferer_cells=K_minus_1,
+                num_interferer_cells_available=K_minus_1,
+                num_active_cells=n_active_cells,
             )
 
         # Compute SIR: P_serving / P_interference

@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 def _sample_to_schema(row: Sample) -> SampleSchema:
     """Map an ORM Sample into its response schema."""
     link: Any = row.link if row.link in ("UL", "DL") else None
+    pairing = getattr(row, "link_pairing", None) or "single"
     return SampleSchema(
         sample_id=row.sample_id,
         uuid=row.uuid,
@@ -35,6 +36,10 @@ def _sample_to_schema(row: Sample) -> SampleSchema:
         snr_db=row.snr_db,
         sir_db=row.sir_db,
         sinr_db=row.sinr_db,
+        ul_sir_db=getattr(row, "ul_sir_db", None),
+        dl_sir_db=getattr(row, "dl_sir_db", None),
+        num_interfering_ues=getattr(row, "num_interfering_ues", None),
+        link_pairing=pairing if pairing in ("single", "paired") else "single",
         num_cells=row.num_cells,
         ts=row.ts,
         status=row.status,
@@ -75,7 +80,10 @@ def list_datasets(
         snrs = [x.snr_db for x in items if x.snr_db is not None]
         sirs = [x.sir_db for x in items if x.sir_db is not None]
         sinrs = [x.sinr_db for x in items if x.sinr_db is not None]
+        ul_sirs = [x.ul_sir_db for x in items if getattr(x, "ul_sir_db", None) is not None]
+        dl_sirs = [x.dl_sir_db for x in items if getattr(x, "dl_sir_db", None) is not None]
         links = sorted({x.link for x in items if x.link})
+        has_paired = any(getattr(x, "link_pairing", None) == "paired" for x in items)
         summaries.append(
             DatasetSummary(
                 source=src,
@@ -84,7 +92,10 @@ def list_datasets(
                 snr_std=statistics.pstdev(snrs) if len(snrs) > 1 else 0.0 if snrs else None,
                 sir_mean=statistics.fmean(sirs) if sirs else None,
                 sinr_mean=statistics.fmean(sinrs) if sinrs else None,
+                ul_sir_mean=statistics.fmean(ul_sirs) if ul_sirs else None,
+                dl_sir_mean=statistics.fmean(dl_sirs) if dl_sirs else None,
                 links=links,
+                has_paired=has_paired,
             )
         )
 

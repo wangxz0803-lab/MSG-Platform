@@ -82,6 +82,20 @@ export default function Datasets() {
         render: (v: number | null) => formatNumber(v, 2),
       },
       {
+        title: 'UL SIR',
+        dataIndex: 'ul_sir_mean',
+        key: 'ul_sir_mean',
+        align: 'right',
+        render: (v: number | null) => (v != null ? formatNumber(v, 2) : '-'),
+      },
+      {
+        title: 'DL SIR',
+        dataIndex: 'dl_sir_mean',
+        key: 'dl_sir_mean',
+        align: 'right',
+        render: (v: number | null) => (v != null ? formatNumber(v, 2) : '-'),
+      },
+      {
         title: 'SINR mean',
         dataIndex: 'sinr_mean',
         key: 'sinr_mean',
@@ -92,9 +106,10 @@ export default function Datasets() {
         title: '链路',
         dataIndex: 'links',
         key: 'links',
-        render: (links: LinkType[]) => (
+        render: (links: LinkType[], record) => (
           <Space wrap>
             {links?.map((l) => <Tag key={l}>{l}</Tag>)}
+            {record.has_paired && <Tag color="blue">配对</Tag>}
           </Space>
         ),
       },

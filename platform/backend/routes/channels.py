@@ -133,10 +133,14 @@ def list_channels(
                     "snr_dB",
                     "sinr_dB",
                     "sir_dB",
+                    "ul_sir_dB",
+                    "dl_sir_dB",
                     "source",
                     "link",
+                    "link_pairing",
                     "channel_est_mode",
                     "serving_cell_id",
+                    "num_interfering_ues",
                 )
             }
         except Exception:

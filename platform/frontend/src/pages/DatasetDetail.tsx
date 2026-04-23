@@ -42,11 +42,31 @@ export default function DatasetDetail() {
         render: (v: number | null) => formatNumber(v, 2),
       },
       {
+        title: 'UL SIR',
+        dataIndex: 'ul_sir_dB',
+        key: 'ul_sir_dB',
+        align: 'right',
+        render: (v: number | null) => (v != null ? formatNumber(v, 2) : '-'),
+      },
+      {
+        title: 'DL SIR',
+        dataIndex: 'dl_sir_dB',
+        key: 'dl_sir_dB',
+        align: 'right',
+        render: (v: number | null) => (v != null ? formatNumber(v, 2) : '-'),
+      },
+      {
         title: 'SINR (dB)',
         dataIndex: 'sinr_dB',
         key: 'sinr_dB',
         align: 'right',
         render: (v: number | null) => formatNumber(v, 2),
+      },
+      {
+        title: '配对',
+        dataIndex: 'link_pairing',
+        key: 'link_pairing',
+        render: (v: string) => (v === 'paired' ? <Tag color="blue">配对</Tag> : '-'),
       },
       {
         title: '时间戳',
@@ -85,12 +105,12 @@ export default function DatasetDetail() {
         </Title>
 
         <Row gutter={16}>
-          <Col span={6}>
+          <Col span={4}>
             <Card>
               <Statistic title="总样本数" value={summary?.count ?? data?.total ?? 0} />
             </Card>
           </Col>
-          <Col span={6}>
+          <Col span={4}>
             <Card>
               <Statistic
                 title="SNR 均值"
@@ -99,7 +119,7 @@ export default function DatasetDetail() {
               />
             </Card>
           </Col>
-          <Col span={6}>
+          <Col span={4}>
             <Card>
               <Statistic
                 title="SIR 均值"
@@ -108,7 +128,25 @@ export default function DatasetDetail() {
               />
             </Card>
           </Col>
-          <Col span={6}>
+          <Col span={4}>
+            <Card>
+              <Statistic
+                title="UL SIR 均值"
+                value={formatNumber(summary?.ul_sir_mean, 2)}
+                suffix="dB"
+              />
+            </Card>
+          </Col>
+          <Col span={4}>
+            <Card>
+              <Statistic
+                title="DL SIR 均值"
+                value={formatNumber(summary?.dl_sir_mean, 2)}
+                suffix="dB"
+              />
+            </Card>
+          </Col>
+          <Col span={4}>
             <Card>
               <Statistic
                 title="SINR 均值"
@@ -118,6 +156,9 @@ export default function DatasetDetail() {
             </Card>
           </Col>
         </Row>
+        {summary?.has_paired && (
+          <Tag color="blue" style={{ marginTop: 8 }}>含配对 UL+DL 样本</Tag>
+        )}
 
         <Card title="SINR 分布">
           <SINRHistogram values={sinrValues} />

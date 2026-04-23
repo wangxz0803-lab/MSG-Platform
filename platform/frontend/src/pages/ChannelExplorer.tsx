@@ -247,11 +247,22 @@ function DetailView({ sampleIndex, onBack }: { sampleIndex: number; onBack: () =
                 <Descriptions.Item label="SINR">
                   {formatNumber(meta.sinr_dB, 1)} dB
                 </Descriptions.Item>
+                {meta.ul_sir_dB != null && (
+                  <Descriptions.Item label="UL SIR">
+                    {formatNumber(meta.ul_sir_dB, 1)} dB
+                  </Descriptions.Item>
+                )}
+                {meta.dl_sir_dB != null && (
+                  <Descriptions.Item label="DL SIR">
+                    {formatNumber(meta.dl_sir_dB, 1)} dB
+                  </Descriptions.Item>
+                )}
                 <Descriptions.Item label="Source">
                   <Tag color="blue">{meta.source}</Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label="Link">
                   <Tag>{meta.link}</Tag>
+                  {meta.link_pairing === 'paired' && <Tag color="blue">配对</Tag>}
                 </Descriptions.Item>
                 <Descriptions.Item label="Est Mode">
                   <Tag color="green">{meta.channel_est_mode}</Tag>
@@ -259,6 +270,11 @@ function DetailView({ sampleIndex, onBack }: { sampleIndex: number; onBack: () =
                 <Descriptions.Item label="Serving Cell">
                   {meta.serving_cell_id}
                 </Descriptions.Item>
+                {meta.num_interfering_ues != null && (
+                  <Descriptions.Item label="干扰 UE 数">
+                    {meta.num_interfering_ues}
+                  </Descriptions.Item>
+                )}
                 <Descriptions.Item label="Position">
                   {meta.ue_position
                     ? `[${meta.ue_position.map((v) => formatNumber(v, 1)).join(', ')}]`

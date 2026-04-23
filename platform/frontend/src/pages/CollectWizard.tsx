@@ -145,6 +145,7 @@ interface ChannelConfigValues {
   pilot_type_dl: string;
   pilot_type_ul: string;
   num_samples: number;
+  num_interfering_ues: number;
   scenario?: string;
   channel_model: string;
   tdd_pattern: string;
@@ -207,6 +208,7 @@ const DEFAULT_CHANNEL: ChannelConfigValues = {
   pilot_type_dl: 'csi_rs_gold',
   pilot_type_ul: 'srs_zc',
   num_samples: 100,
+  num_interfering_ues: 3,
   scenario: 'munich',
   channel_model: 'TDL-C',
   tdd_pattern: 'DDDSU',
@@ -522,6 +524,7 @@ export default function CollectWizard() {
     config.srs_periodicity = channelConfig.srs_periodicity;
     config.srs_b_hop = channelConfig.srs_b_hop;
     config.num_samples = channelConfig.num_samples;
+    config.num_interfering_ues = channelConfig.num_interfering_ues;
 
     if (channelConfig.link === 'DL') {
       config.pilot_type = channelConfig.pilot_type_dl;
@@ -1252,15 +1255,33 @@ export default function CollectWizard() {
               </Col>
             </Row>
 
-            <Divider orientation="left" plain>采样配置</Divider>
+            <Divider orientation="left" plain>干扰与采样配置</Divider>
 
-            <Form.Item
-              label="采样数量"
-              name="num_samples"
-              rules={[{ required: true, message: '请输入采样数量' }]}
-            >
-              <InputNumber min={1} max={100000} style={{ width: '100%' }} />
-            </Form.Item>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  label="邻区干扰 UE 数（上限）"
+                  name="num_interfering_ues"
+                  tooltip="上行 SRS 干扰：每个邻区随机 0~N 个 UE 同时发送 SRS。下行 CSI-RS 干扰：随机 0~K-1 个邻区发送 CSI-RS。设为 0 则无干扰注入"
+                >
+                  <InputNumber min={0} max={20} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  label="采样数量"
+                  name="num_samples"
+                  rules={[{ required: true, message: '请输入采样数量' }]}
+                >
+                  <InputNumber min={1} max={100000} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+            {channelConfig.link === 'both' && (
+              <Paragraph type="secondary" style={{ marginTop: -8 }}>
+                双向配对模式：每个采样点同时生成 UL（含邻区 SRS 干扰）和 DL（含邻区 CSI-RS 干扰）的理想/估计信道对，干扰 UE 数和邻区数逐样本随机。
+              </Paragraph>
+            )}
 
             {source === 'sionna_rt' && (
               <Form.Item
@@ -1430,9 +1451,17 @@ export default function CollectWizard() {
                 <Descriptions.Item label="SRS 频域跳频">
                   {channelConfig.srs_b_hop >= 3 ? '不跳频' : `b_hop=${channelConfig.srs_b_hop}`}
                 </Descriptions.Item>
+                <Descriptions.Item label="邻区干扰 UE 上限">
+                  {channelConfig.num_interfering_ues}
+                </Descriptions.Item>
                 <Descriptions.Item label="采样数量">
                   {channelConfig.num_samples}
                 </Descriptions.Item>
+                {channelConfig.link === 'both' && (
+                  <Descriptions.Item label="配对模式">
+                    UL+DL 配对（干扰随机化）
+                  </Descriptions.Item>
+                )}
                 {source === 'sionna_rt' && channelConfig.scenario && (
                   <Descriptions.Item label="场景">
                     {scenarioLabel(channelConfig.scenario)}
