@@ -11,8 +11,16 @@
 - Hydra (ML 配置) + pydantic-settings (基础设施配置)
 - structlog (日志) + pytest (测试)
 
+## Python 环境
+- **必须使用** `D:\MSG\.venv312\Scripts\python.exe`（已安装 sionna 2.0.1 + drjit + mitsuba CPU 后端）
+- 新工程以 editable 模式安装在此 venv 中
+- 所有 python/pytest/pip 命令必须用此 venv 的解释器，不要用系统 Python
+
 ## 开发命令
 ```bash
+# 使用 venv Python
+D:/MSG/.venv312/Scripts/python.exe -m pytest tests/ -x -q
+
 make install          # 安装开发依赖
 make lint             # ruff + black check
 make format           # ruff fix + black format

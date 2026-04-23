@@ -109,6 +109,58 @@ def _save_sample(sample: Any, output_dir: Path, idx: int) -> Path:
     return path
 
 
+def _register_manifest(
+    samples: list[Any],
+    output_dir: Path,
+    source_name: str,
+    job_id: str | None,
+) -> int:
+    """Append saved samples to bridge_out/manifest.parquet so they show in datasets."""
+    try:
+        from msg_embedding.data.manifest import Manifest
+
+        manifest_path = _PROJECT_ROOT / "bridge_out" / "manifest.parquet"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest = Manifest(manifest_path)
+
+        rows = []
+        for idx, sample in enumerate(samples):
+            pt_path = output_dir / f"sample_{idx:06d}.pt"
+            row = {
+                "uuid": sample.sample_id,
+                "job_id": job_id,
+                "run_id": None,
+                "source": source_name,
+                "shard_id": 0,
+                "sample_id": idx,
+                "stage": "raw",
+                "status": "ok",
+                "link": sample.link,
+                "snr_dB": float(sample.snr_dB),
+                "sir_dB": float(sample.sir_dB) if sample.sir_dB is not None else None,
+                "sinr_dB": float(sample.sinr_dB),
+                "num_cells": sample.meta.get("num_cells"),
+                "serving_cell_id": int(sample.serving_cell_id),
+                "ue_x": float(sample.ue_position[0]) if sample.ue_position is not None else None,
+                "ue_y": float(sample.ue_position[1]) if sample.ue_position is not None else None,
+                "ue_z": float(sample.ue_position[2]) if sample.ue_position is not None else None,
+                "channel_est_mode": sample.channel_est_mode,
+                "split": "unassigned",
+                "hash": None,
+                "path": str(pt_path),
+                "error_msg": None,
+            }
+            rows.append(row)
+
+        manifest.append(rows)
+        manifest.save()
+        _log.info("manifest_registered", count=len(rows), path=str(manifest_path))
+        return len(rows)
+    except Exception as exc:
+        _log.warning("manifest_registration_failed", error=str(exc))
+        return 0
+
+
 def main() -> None:
     defaults = _load_yaml_defaults()
     overrides = _parse_cli_overrides()
@@ -116,6 +168,7 @@ def main() -> None:
     cfg: dict[str, Any] = {**defaults, **overrides}
 
     source_name = str(cfg.pop("source", "sionna_rt"))
+    job_id = cfg.pop("project.job_id", None) or cfg.pop("job_id", None)
     output_dir = Path(str(cfg.pop("output_dir", "artifacts/simulate_out")))
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -147,6 +200,7 @@ def main() -> None:
     _write_progress(output_dir, 0.0, "starting")
 
     saved = 0
+    collected_samples: list[Any] = []
     errors: list[dict[str, str]] = []
     t0 = time.monotonic()
 
@@ -154,6 +208,7 @@ def main() -> None:
         for idx, sample in enumerate(source.iter_samples()):
             try:
                 _save_sample(sample, output_dir, idx)
+                collected_samples.append(sample)
                 saved += 1
                 pct = min(99.0, saved / max(num_samples, 1) * 100)
                 _emit_progress(pct, f"sample {saved}/{num_samples}")
@@ -188,6 +243,8 @@ def main() -> None:
 
     _emit_progress(100.0, "done")
     _write_progress(output_dir, 100.0, "done", **summary)
+
+    _register_manifest(collected_samples, output_dir, source_name, job_id)
 
     _log.info("simulate_done", saved=saved, requested=num_samples, errors=len(errors), elapsed=f"{elapsed:.1f}s")
 

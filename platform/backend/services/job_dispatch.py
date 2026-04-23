@@ -1,4 +1,9 @@
-"""Job dispatch service -- persist Job row + drop queue file for worker."""
+"""Job dispatch service -- persist Job row + enqueue via Dramatiq (Redis).
+
+Primary path: send directly to the Dramatiq actor via Redis.
+Fallback: if Redis is unreachable, write a JSON file to the queue directory
+so the queue_watcher can pick it up later.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +25,76 @@ VALID_JOB_TYPES = frozenset(
     {"simulate", "convert", "bridge", "train", "eval", "infer", "export", "report"}
 )
 
+# ---------------------------------------------------------------------------
+# Dramatiq broker initialisation (lazy, one-time)
+# ---------------------------------------------------------------------------
+_broker_ready = False
+
+
+def _ensure_dramatiq_broker() -> bool:
+    """Initialise the Dramatiq RedisBroker once. Return True on success."""
+    global _broker_ready
+    if _broker_ready:
+        return True
+    try:
+        import dramatiq
+        from dramatiq.brokers.redis import RedisBroker
+
+        settings = get_settings()
+        broker = RedisBroker(url=settings.redis_url)
+        dramatiq.set_broker(broker)
+        _broker_ready = True
+        _log.info("dramatiq_broker_init_ok", redis_url=settings.redis_url)
+        return True
+    except Exception as exc:
+        _log.warning("dramatiq_broker_init_failed", error=str(exc))
+        return False
+
+
+def _send_to_dramatiq(job_type: str, job_id: str, overrides: dict[str, Any]) -> bool:
+    """Try to enqueue a job directly via Dramatiq. Return True on success."""
+    try:
+        if not _ensure_dramatiq_broker():
+            return False
+        # Import actors *after* broker is set so decorators bind correctly.
+        from platform.worker.actors import get_actor
+
+        actor = get_actor(job_type)
+        actor.send(job_id=job_id, overrides=overrides)
+        _log.info("dramatiq_send_ok", job_id=job_id, job_type=job_type)
+        return True
+    except Exception as exc:
+        _log.warning(
+            "dramatiq_send_failed",
+            job_id=job_id,
+            job_type=job_type,
+            error=str(exc),
+        )
+        return False
+
+
+def _write_queue_file(
+    job_id: str,
+    job_type: str,
+    overrides: dict[str, Any],
+    display_name: str | None,
+) -> None:
+    """Fallback: write a JSON file for the queue_watcher to pick up."""
+    settings = get_settings()
+    queue_file = settings.worker_queue_path / f"{job_id}.json"
+    payload = {
+        "job_id": job_id,
+        "type": job_type,
+        "config_overrides": overrides,
+        "display_name": display_name,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    try:
+        queue_file.write_text(json.dumps(payload), encoding="utf-8")
+        _log.info("queue_file_fallback_ok", job_id=job_id, path=str(queue_file))
+    except OSError as exc:
+        _log.error("queue_file_write_failed", path=str(queue_file), error=str(exc))
+
 
 def new_job_id() -> str:
     """Return a fresh uuid4 hex string."""
@@ -33,7 +108,11 @@ def dispatch_job(
     display_name: str | None = None,
     explicit_job_id: str | None = None,
 ) -> Job:
-    """Create a Job row and drop the worker queue file.
+    """Create a Job row and enqueue it for the worker.
+
+    Primary path: send directly to Dramatiq via Redis.
+    Fallback: if Redis/Dramatiq is unavailable, write a JSON file so the
+    queue_watcher can pick it up.
 
     Raises ``ValueError`` on unknown job types.
     """
@@ -61,20 +140,22 @@ def dispatch_job(
     session.commit()
     session.refresh(job)
 
-    queue_file = settings.worker_queue_path / f"{job_id}.json"
-    payload = {
-        "job_id": job_id,
-        "type": job_type,
-        "config_overrides": overrides,
-        "display_name": display_name,
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
-    try:
-        queue_file.write_text(json.dumps(payload), encoding="utf-8")
-    except OSError as exc:
-        _log.error("queue_file_write_failed", path=str(queue_file), error=str(exc))
+    # --- enqueue: Dramatiq first, file-drop fallback ---
+    sent = _send_to_dramatiq(job_type, job_id, overrides)
+    if not sent:
+        _log.warning(
+            "dramatiq_unavailable_falling_back_to_file",
+            job_id=job_id,
+            job_type=job_type,
+        )
+        _write_queue_file(job_id, job_type, overrides, display_name)
 
-    _log.info("job_dispatched", job_id=job_id, job_type=job_type)
+    _log.info(
+        "job_dispatched",
+        job_id=job_id,
+        job_type=job_type,
+        via="dramatiq" if sent else "file",
+    )
     return job
 
 

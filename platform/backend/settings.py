@@ -39,6 +39,7 @@ class BackendSettings(BaseSettings):
     worker_cancel_dir: str = Field(
         default=str(_MSG_REPO_ROOT / "platform" / "worker" / "cancel")
     )
+    redis_url: str = Field(default="redis://localhost:6379/0")
     configs_dir: str = Field(default=str(_MSG_REPO_ROOT / "configs"))
     schema_path: str = Field(default=str(_MSG_REPO_ROOT / "configs" / "_schema.json"))
 

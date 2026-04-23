@@ -20,8 +20,16 @@ from ..schemas.sample import (
     SampleSchema,
 )
 from ..services.job_dispatch import deserialize_overrides, dispatch_job
+from ..services.manifest_sync import sync_manifest_to_db
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
+
+
+@router.post("/sync", status_code=status.HTTP_200_OK)
+def sync_manifest(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Re-sync manifest.parquet → DB so newly collected samples appear."""
+    n = sync_manifest_to_db(db)
+    return {"synced": n}
 
 
 def _sample_to_schema(row: Sample) -> SampleSchema:
@@ -59,6 +67,7 @@ def list_datasets(
     db: Session = Depends(get_db),
 ) -> DatasetListResponse:
     """Return per-source dataset summaries matching optional filters."""
+    sync_manifest_to_db(db)
     stmt = select(Sample)
     if source:
         stmt = stmt.where(Sample.source == source)
