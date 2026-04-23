@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,45 +25,10 @@ _log = get_logger(__name__)
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
-_worker_thread: threading.Thread | None = None
-_watcher_thread: threading.Thread | None = None
-
-
-def _start_embedded_worker() -> None:
-    """Start Dramatiq worker + queue watcher as daemon threads."""
-    global _worker_thread, _watcher_thread
-
-    try:
-        import dramatiq
-        from dramatiq.brokers.redis import RedisBroker
-
-        settings = get_settings()
-        broker = RedisBroker(url=settings.redis_url)
-        dramatiq.set_broker(broker)
-
-        from platform.worker import actors  # noqa: F401
-
-        worker = dramatiq.Worker(broker, worker_threads=4, worker_timeout=1000)
-        worker.start()
-        _log.info("embedded_worker_started", threads=4)
-
-        from platform.worker.queue_watcher import watch_forever as _wf
-        from platform.worker.settings import get_settings as get_worker_settings
-
-        ws = get_worker_settings()
-        _watcher_thread = threading.Thread(
-            target=_wf, kwargs={"settings": ws}, daemon=True, name="queue-watcher"
-        )
-        _watcher_thread.start()
-        _log.info("embedded_watcher_started")
-
-    except Exception as exc:
-        _log.warning("embedded_worker_start_failed", error=str(exc))
-
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Initialise DB, sync manifest + artifacts, start worker on startup."""
+    """Initialise DB, sync manifest + artifacts on startup."""
     settings = get_settings()
     settings.ensure_dirs()
     init_db()
@@ -81,7 +45,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             _log.warning("artifact_scan_failed", error=str(exc))
             n_runs = n_art = 0
     _log.info("backend_startup_complete", samples=n_samples, runs=n_runs, artifacts=n_art)
-    _start_embedded_worker()
     yield
 
 
