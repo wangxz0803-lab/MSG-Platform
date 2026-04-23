@@ -937,6 +937,7 @@ class InternalSimSource(DataSource):
         link_override: str | None = None,
         pilot_override: str | None = None,
         lsp_override: dict | None = None,
+        paired: bool = False,
     ) -> ChannelSample:
         """Generate one physically meaningful ChannelSample."""
         rng = np.random.default_rng(self._seed + idx)
@@ -1010,7 +1011,7 @@ class InternalSimSource(DataSource):
             from msg_embedding.channel_models.tdl import get_tdl_profile
 
             effective_tdl = get_tdl_profile("TDL-D")
-            effective_k_linear = 10.0 ** (effective_tdl.k_factor_dB / 10.0)
+            effective_k_linear = 10.0 ** ((effective_tdl.k_factor_dB or 0.0) / 10.0)
         elif not is_los and self._tdl_profile.is_los:
             from msg_embedding.channel_models.tdl import get_tdl_profile
 
@@ -1111,33 +1112,76 @@ class InternalSimSource(DataSource):
         sir_db = _clamp_db(sir_db)
         sinr_db = _clamp_db(sinr_db)
 
-        # -- Generate reference signals ----------------------------------------
-        if effective_pilot == "srs_zc":
-            pilots = _generate_pilots_srs(RB, serving_pci)
-        else:
-            pilots = _generate_pilots_csirs(RB, serving_pci)
-
-        # -- Channel estimation ------------------------------------------------
-        h_serving_est = self._estimate_channel(
-            h_serving_true,
-            pilots,
-            self.channel_est_mode,
-            snr_db,
-            rng,
-            tau_rms_ns_override=sample_tau_rms_ns,
+        # -- Interference-aware channel estimation ----------------------------
+        from msg_embedding.data.sources._interference_estimation import (
+            estimate_channel_with_interference,
+            estimate_paired_channels,
         )
 
-        # -- Interference signal (observed at receiver) ------------------------
-        # Sum of interferer channels * pilot (simplified model)
+        intf_cell_ids = (
+            [sites[k].pci for k in interferer_indices] if interferer_indices else None
+        )
+        n_intf_ues = max(1, self.num_ues - 1)
+
+        h_ul_true_out: np.ndarray | None = None
+        h_ul_est_out: np.ndarray | None = None
+        h_dl_true_out: np.ndarray | None = None
+        h_dl_est_out: np.ndarray | None = None
+        ul_sir_db_out: float | None = None
+        dl_sir_db_out: float | None = None
+        n_intf_ues_out: int | None = None
+        link_pairing = "single"
+
+        if paired:
+            paired_result = estimate_paired_channels(
+                h_dl_true=h_serving_true,
+                h_interferers_dl=h_interferers,
+                serving_cell_id=serving_pci,
+                interferer_cell_ids=intf_cell_ids,
+                snr_dB=snr_db,
+                rng=rng,
+                est_mode=self.channel_est_mode,
+                tau_rms_ns=sample_tau_rms_ns,
+                subcarrier_spacing=self.subcarrier_spacing,
+                num_interfering_ues=n_intf_ues,
+            )
+            h_serving_est = paired_result["h_dl_est"]
+            h_ul_true_out = paired_result["h_ul_true"]
+            h_ul_est_out = paired_result["h_ul_est"]
+            h_dl_true_out = paired_result["h_dl_true"]
+            h_dl_est_out = paired_result["h_dl_est"]
+            ul_sir_db_out = paired_result["ul_sir_dB"]
+            dl_sir_db_out = paired_result["dl_sir_dB"]
+            n_intf_ues_out = paired_result["num_interfering_ues"]
+            link_pairing = "paired"
+            sample_link = "DL"
+        else:
+            if effective_pilot == "srs_zc":
+                pilots = _generate_pilots_srs(RB, serving_pci)
+            else:
+                pilots = _generate_pilots_csirs(RB, serving_pci)
+
+            direction: str = "UL" if sample_link == "UL" else "DL"
+            est_result = estimate_channel_with_interference(
+                h_serving_true=h_serving_true,
+                h_interferers=h_interferers,
+                pilots_serving=pilots,
+                interferer_cell_ids=intf_cell_ids,
+                direction=direction,  # type: ignore[arg-type]
+                snr_dB=snr_db,
+                rng=rng,
+                est_mode=self.channel_est_mode,
+                tau_rms_ns=sample_tau_rms_ns,
+                subcarrier_spacing=self.subcarrier_spacing,
+                serving_cell_id=serving_pci,
+                num_interfering_ues=n_intf_ues,
+            )
+            h_serving_est = est_result.h_est
+
+        # Legacy interference signal (observed at receiver)
         interference_signal: np.ndarray | None = None
         if h_interferers is not None:
-            # interference_signal: [T, RB, BS_ant] — sum over interferers & UE_ant
-            # We model it as the sum of all interferer channels multiplied by
-            # their respective reference signals, observed across BS antennas.
-            # Shape: [T, RB * UE_ant] → [T, N_RE_obs]
             interf_sum = np.sum(h_interferers, axis=0)  # [T, RB, BS, UE]
-            # Flatten the last two dims to get [T, RB * BS * UE] → too large,
-            # use [T, RB, UE] by summing over BS
             interf_signal_raw = np.sum(interf_sum, axis=2)  # [T, RB, UE]
             interference_signal = interf_signal_raw.astype(np.complex64)
 
@@ -1147,6 +1191,8 @@ class InternalSimSource(DataSource):
         ssb_sinr: list[float] | None = None
         ssb_best_beam: list[int] | None = None
         ssb_pcis_list: list[int] | None = None
+        ssb_rsrp_true: list[float] | None = None
+        ssb_sinr_true: list[float] | None = None
 
         if self.enable_ssb and K >= 1:
             from msg_embedding.phy_sim.ssb_measurement import SSBMeasurement
@@ -1156,16 +1202,26 @@ class InternalSimSource(DataSource):
                 num_bs_ant=BS_ant,
             )
             all_pcis = [s.pci for s in sites]
+            noise_power_lin = 10.0 ** (noise_power_dbm / 10.0) * 1e-3
             ssb_result = ssb_meas.measure(
                 h_per_cell=h_all,
                 pcis=all_pcis,
-                noise_power_lin=10.0 ** (noise_power_dbm / 10.0) * 1e-3,
+                noise_power_lin=noise_power_lin,
             )
             ssb_rsrp = ssb_result.rsrp_dBm.tolist()
             ssb_rsrq = ssb_result.rsrq_dB.tolist()
             ssb_sinr = ssb_result.ss_sinr_dB.tolist()
             ssb_best_beam = ssb_result.best_beam_idx.tolist()
             ssb_pcis_list = ssb_result.pcis
+
+            if paired:
+                ssb_result_ideal = ssb_meas.measure(
+                    h_per_cell=h_all,
+                    pcis=all_pcis,
+                    noise_power_lin=1e-30,
+                )
+                ssb_rsrp_true = ssb_result_ideal.rsrp_dBm.tolist()
+                ssb_sinr_true = ssb_result_ideal.ss_sinr_dB.tolist()
 
         # -- Assemble meta dict ------------------------------------------------
         meta = {
@@ -1238,6 +1294,16 @@ class InternalSimSource(DataSource):
             ue_position=ue_pos.astype(np.float64),
             channel_model=self.channel_model_name,
             tdd_pattern=self.tdd_pattern_name,
+            link_pairing=link_pairing,  # type: ignore[arg-type]
+            h_ul_true=h_ul_true_out,
+            h_ul_est=h_ul_est_out,
+            h_dl_true=h_dl_true_out,
+            h_dl_est=h_dl_est_out,
+            ul_sir_dB=ul_sir_db_out,
+            dl_sir_dB=dl_sir_db_out,
+            num_interfering_ues=n_intf_ues_out,
+            ssb_rsrp_true_dBm=ssb_rsrp_true,
+            ssb_sinr_true_dB=ssb_sinr_true,
             source="internal_sim",
             sample_id=str(uuid.uuid4()),
             created_at=datetime.now(timezone.utc),
@@ -1327,75 +1393,14 @@ class InternalSimSource(DataSource):
                 lsp_override = trajectory_lsps[idx]
 
             if self.link == "BOTH":
-                # -- TDD Reciprocity (Fix 3) ----------------------------------
-                # Generate DL sample first
-                dl_sample = self._generate_one_sample(
+                # Paired mode: single sample with both UL and DL channels,
+                # each estimated with direction-appropriate interference.
+                yield self._generate_one_sample(
                     idx,
                     sites,
-                    link_override="DL",
-                    pilot_override=self.pilot_type_dl,
                     lsp_override=lsp_override,
+                    paired=True,
                 )
-                # TDD reciprocity: UL channel = conjugate transpose of DL channel
-                # H_UL[t, rb, ue_ant, bs_ant] = H_DL[t, rb, bs_ant, ue_ant]^H
-                h_ul_true = np.conj(dl_sample.h_serving_true.transpose(0, 1, 3, 2))
-                # Add small independent noise for UL estimation imperfections
-                rng_ul = np.random.default_rng(self._seed + idx + self.num_samples)
-                noise_scale = 0.01
-                h_ul_true = (
-                    h_ul_true
-                    + noise_scale
-                    * (
-                        rng_ul.standard_normal(h_ul_true.shape)
-                        + 1j * rng_ul.standard_normal(h_ul_true.shape)
-                    )
-                    / math.sqrt(2.0)
-                ).astype(np.complex64)
-
-                # Generate UL pilots and estimate
-                ul_pilots = _generate_pilots_srs(self._num_rb, dl_sample.serving_cell_id)
-                h_ul_est = self._estimate_channel(
-                    h_ul_true,
-                    ul_pilots,
-                    self.channel_est_mode,
-                    dl_sample.snr_dB,
-                    rng_ul,
-                )
-
-                # Construct UL sample reusing DL metadata
-                ul_sample = ChannelSample(
-                    h_serving_true=h_ul_true,
-                    h_serving_est=h_ul_est,
-                    h_interferers=(
-                        None
-                        if dl_sample.h_interferers is None
-                        else np.conj(dl_sample.h_interferers.transpose(0, 1, 2, 4, 3)).astype(
-                            np.complex64
-                        )
-                    ),
-                    interference_signal=dl_sample.interference_signal,
-                    noise_power_dBm=dl_sample.noise_power_dBm,
-                    snr_dB=dl_sample.snr_dB,
-                    sir_dB=dl_sample.sir_dB,
-                    sinr_dB=dl_sample.sinr_dB,
-                    ssb_rsrp_dBm=dl_sample.ssb_rsrp_dBm,
-                    ssb_rsrq_dB=dl_sample.ssb_rsrq_dB,
-                    ssb_sinr_dB=dl_sample.ssb_sinr_dB,
-                    ssb_best_beam_idx=dl_sample.ssb_best_beam_idx,
-                    ssb_pcis=dl_sample.ssb_pcis,
-                    link="UL",
-                    channel_est_mode=dl_sample.channel_est_mode,
-                    serving_cell_id=dl_sample.serving_cell_id,
-                    ue_position=dl_sample.ue_position,
-                    channel_model=dl_sample.channel_model,
-                    tdd_pattern=dl_sample.tdd_pattern,
-                    source="internal_sim",
-                    sample_id=str(uuid.uuid4()),
-                    created_at=datetime.now(timezone.utc),
-                    meta={**dl_sample.meta, "tdd_reciprocal": True},
-                )
-                yield dl_sample
-                yield ul_sample
             else:
                 yield self._generate_one_sample(
                     idx,
@@ -1409,7 +1414,7 @@ class InternalSimSource(DataSource):
     def describe(self) -> dict[str, Any]:
         """Return metadata describing the source configuration."""
         K = self.num_sites * self.sectors_per_site
-        multiplier = 2 if self.link == "BOTH" else 1
+        multiplier = 1
         return {
             "source": "internal_sim",
             "scenario": self.scenario,

@@ -1053,6 +1053,7 @@ class SionnaRTSource(DataSource):
         *,
         link_override: str | None = None,
         pilot_override: str | None = None,
+        paired: bool = False,
     ) -> ChannelSample:
         """Generate one physically meaningful ChannelSample.
 
@@ -1238,22 +1239,75 @@ class SionnaRTSource(DataSource):
         sir_db = _clamp_db(sir_db)
         sinr_db = _clamp_db(sinr_db)
 
-        # --- Generate reference signals ---------------------------------------
-        if effective_pilot == "srs_zc":
-            pilots = _generate_pilots_srs(RB, serving_pci)
-        else:
-            pilots = _generate_pilots_csirs(RB, serving_pci)
-
-        # --- Channel estimation -----------------------------------------------
-        h_serving_est = self._estimate_channel(
-            h_serving_true,
-            pilots,
-            self.channel_est_mode,
-            snr_db,
-            rng,
+        # --- Interference-aware channel estimation ----------------------------
+        from msg_embedding.data.sources._interference_estimation import (
+            estimate_channel_with_interference,
+            estimate_paired_channels,
         )
 
-        # --- Interference signal (observed at receiver) -----------------------
+        intf_cell_ids = (
+            [getattr(sites[k], "pci", k) for k in interferer_indices]
+            if interferer_indices
+            else None
+        )
+        n_intf_ues = max(1, self.num_ues - 1)
+
+        h_ul_true_out: np.ndarray | None = None
+        h_ul_est_out: np.ndarray | None = None
+        h_dl_true_out: np.ndarray | None = None
+        h_dl_est_out: np.ndarray | None = None
+        ul_sir_db_out: float | None = None
+        dl_sir_db_out: float | None = None
+        n_intf_ues_out: int | None = None
+        link_pairing = "single"
+
+        if paired:
+            paired_result = estimate_paired_channels(
+                h_dl_true=h_serving_true,
+                h_interferers_dl=h_interferers,
+                serving_cell_id=serving_pci,
+                interferer_cell_ids=intf_cell_ids,
+                snr_dB=snr_db,
+                rng=rng,
+                est_mode=self.channel_est_mode,
+                tau_rms_ns=self.tau_rms_ns,
+                subcarrier_spacing=self.subcarrier_spacing,
+                num_interfering_ues=n_intf_ues,
+            )
+            h_serving_est = paired_result["h_dl_est"]
+            h_ul_true_out = paired_result["h_ul_true"]
+            h_ul_est_out = paired_result["h_ul_est"]
+            h_dl_true_out = paired_result["h_dl_true"]
+            h_dl_est_out = paired_result["h_dl_est"]
+            ul_sir_db_out = paired_result["ul_sir_dB"]
+            dl_sir_db_out = paired_result["dl_sir_dB"]
+            n_intf_ues_out = paired_result["num_interfering_ues"]
+            link_pairing = "paired"
+            sample_link = "DL"
+        else:
+            if effective_pilot == "srs_zc":
+                pilots = _generate_pilots_srs(RB, serving_pci)
+            else:
+                pilots = _generate_pilots_csirs(RB, serving_pci)
+
+            direction: str = "UL" if sample_link == "UL" else "DL"
+            est_result = estimate_channel_with_interference(
+                h_serving_true=h_serving_true,
+                h_interferers=h_interferers,
+                pilots_serving=pilots,
+                interferer_cell_ids=intf_cell_ids,
+                direction=direction,  # type: ignore[arg-type]
+                snr_dB=snr_db,
+                rng=rng,
+                est_mode=self.channel_est_mode,
+                tau_rms_ns=self.tau_rms_ns,
+                subcarrier_spacing=self.subcarrier_spacing,
+                serving_cell_id=serving_pci,
+                num_interfering_ues=n_intf_ues,
+            )
+            h_serving_est = est_result.h_est
+
+        # Legacy interference signal (observed at receiver)
         interference_signal: np.ndarray | None = None
         if h_interferers is not None:
             interf_sum = np.sum(h_interferers, axis=0)  # [T, RB, BS, UE]
@@ -1266,6 +1320,8 @@ class SionnaRTSource(DataSource):
         ssb_sinr: list[float] | None = None
         ssb_best_beam: list[int] | None = None
         ssb_pcis_list: list[int] | None = None
+        ssb_rsrp_true: list[float] | None = None
+        ssb_sinr_true: list[float] | None = None
 
         if self.enable_ssb and K >= 1:
             try:
@@ -1276,16 +1332,26 @@ class SionnaRTSource(DataSource):
                     num_bs_ant=BS_ant,
                 )
                 all_pcis = [getattr(s, "pci", i) for i, s in enumerate(sites)]
+                noise_power_lin = 10.0 ** (noise_power_dbm / 10.0) * 1e-3
                 ssb_result = ssb_meas.measure(
                     h_per_cell=h_all_norm,
                     pcis=all_pcis,
-                    noise_power_lin=10.0 ** (noise_power_dbm / 10.0) * 1e-3,
+                    noise_power_lin=noise_power_lin,
                 )
                 ssb_rsrp = ssb_result.rsrp_dBm.tolist()
                 ssb_rsrq = ssb_result.rsrq_dB.tolist()
                 ssb_sinr = ssb_result.ss_sinr_dB.tolist()
                 ssb_best_beam = ssb_result.best_beam_idx.tolist()
                 ssb_pcis_list = ssb_result.pcis
+
+                if paired:
+                    ssb_result_ideal = ssb_meas.measure(
+                        h_per_cell=h_all_norm,
+                        pcis=all_pcis,
+                        noise_power_lin=1e-30,
+                    )
+                    ssb_rsrp_true = ssb_result_ideal.rsrp_dBm.tolist()
+                    ssb_sinr_true = ssb_result_ideal.ss_sinr_dB.tolist()
             except Exception as exc:
                 logger.warning("SSB measurement failed: %s", exc)
 
@@ -1355,6 +1421,16 @@ class SionnaRTSource(DataSource):
             ue_position=ue_pos.astype(np.float64),
             channel_model=self.channel_model_name,
             tdd_pattern=self.tdd_pattern_name,
+            link_pairing=link_pairing,  # type: ignore[arg-type]
+            h_ul_true=h_ul_true_out,
+            h_ul_est=h_ul_est_out,
+            h_dl_true=h_dl_true_out,
+            h_dl_est=h_dl_est_out,
+            ul_sir_dB=ul_sir_db_out,
+            dl_sir_dB=dl_sir_db_out,
+            num_interfering_ues=n_intf_ues_out,
+            ssb_rsrp_true_dBm=ssb_rsrp_true,
+            ssb_sinr_true_dB=ssb_sinr_true,
             source="sionna_rt",
             sample_id=str(uuid.uuid4()),
             created_at=datetime.now(timezone.utc),
@@ -1372,14 +1448,7 @@ class SionnaRTSource(DataSource):
                 yield self._generate_one_sample(
                     idx,
                     sites,
-                    link_override="DL",
-                    pilot_override=self.pilot_type_dl,
-                )
-                yield self._generate_one_sample(
-                    idx,
-                    sites,
-                    link_override="UL",
-                    pilot_override=self.pilot_type_ul,
+                    paired=True,
                 )
             else:
                 yield self._generate_one_sample(idx, sites)
@@ -1519,6 +1588,7 @@ class SionnaRTMockSource(DataSource):
         self.pilot_type: str = str(_dict_get(cfg, "pilot_type", "csi_rs_gold"))
         self.pilot_type_dl: str = str(_dict_get(cfg, "pilot_type_dl", "csi_rs_gold"))
         self.pilot_type_ul: str = str(_dict_get(cfg, "pilot_type_ul", "srs_zc"))
+        self.num_ues: int = int(_dict_get(cfg, "num_ues", 1))
         self.snr_dB: float = float(_dict_get(cfg, "snr_dB", _DEFAULT_SNR_DB))
         self.sir_dB: float = float(_dict_get(cfg, "sir_dB", _DEFAULT_SIR_DB))
         self.noise_power_dBm: float = float(_dict_get(cfg, "noise_power_dBm", _DEFAULT_NOISE_DBM))
@@ -1552,6 +1622,7 @@ class SionnaRTMockSource(DataSource):
         *,
         link_override: str | None = None,
         pilot_override: str | None = None,
+        paired: bool = False,
     ) -> ChannelSample:
         rng = np.random.default_rng(self._seed + idx)
         shape = (self.T, self.RB, self.BS, self.UE)
@@ -1573,6 +1644,29 @@ class SionnaRTMockSource(DataSource):
             10.0 * np.log10(1.0 / (10 ** (-self.snr_dB / 10.0) + 10 ** (-self.sir_dB / 10.0)))
         )
         sinr = float(np.clip(sinr, -49.9, 49.9))
+
+        # Paired mode: generate UL/DL channels for the mock
+        h_ul_true_out: np.ndarray | None = None
+        h_ul_est_out: np.ndarray | None = None
+        h_dl_true_out: np.ndarray | None = None
+        h_dl_est_out: np.ndarray | None = None
+        ul_sir_db_out: float | None = None
+        dl_sir_db_out: float | None = None
+        n_intf_ues_out: int | None = None
+        link_pairing = "single"
+
+        if paired:
+            link_pairing = "paired"
+            h_dl_true_out = h_true
+            h_dl_est_out = h_est
+            ul_shape = (self.T, self.RB, self.UE, self.BS)
+            h_ul_true_out = np.conj(h_true.transpose(0, 1, 3, 2)).astype(np.complex64)
+            h_ul_est_out = (
+                h_ul_true_out + noise_scale * self._randn_c64(rng, ul_shape)
+            ).astype(np.complex64)
+            ul_sir_db_out = float(np.clip(self.sir_dB - 3.0, -49.9, 49.9))
+            dl_sir_db_out = float(np.clip(self.sir_dB, -49.9, 49.9))
+            n_intf_ues_out = max(1, self.num_ues - 1) if self.num_cells > 1 else None
 
         meta = {
             "num_cells": self.num_cells,
@@ -1616,6 +1710,14 @@ class SionnaRTMockSource(DataSource):
             ue_position=np.asarray([0.0, 0.0, 1.5], dtype=np.float64),
             channel_model=self.channel_model_name,
             tdd_pattern=self.tdd_pattern_name,
+            link_pairing=link_pairing,  # type: ignore[arg-type]
+            h_ul_true=h_ul_true_out,
+            h_ul_est=h_ul_est_out,
+            h_dl_true=h_dl_true_out,
+            h_dl_est=h_dl_est_out,
+            ul_sir_dB=ul_sir_db_out,
+            dl_sir_dB=dl_sir_db_out,
+            num_interfering_ues=n_intf_ues_out,
             source="sionna_rt",
             sample_id=str(uuid.uuid4()),
             created_at=datetime.now(timezone.utc),
@@ -1625,16 +1727,7 @@ class SionnaRTMockSource(DataSource):
     def iter_samples(self) -> Iterator[ChannelSample]:
         for idx in range(self.num_samples):
             if self.link == "BOTH":
-                yield self._generate_one_sample(
-                    idx,
-                    link_override="DL",
-                    pilot_override=self.pilot_type_dl,
-                )
-                yield self._generate_one_sample(
-                    idx,
-                    link_override="UL",
-                    pilot_override=self.pilot_type_ul,
-                )
+                yield self._generate_one_sample(idx, paired=True)
             else:
                 yield self._generate_one_sample(idx)
 

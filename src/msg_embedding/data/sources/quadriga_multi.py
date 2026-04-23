@@ -332,8 +332,76 @@ class QuadrigaMultiSource(DataSource):
                     sir_dB = self._estimate_sir(h_serving_true, h_interferers)
                 sinr_dB = self._sinr_from_snr_sir(snr_dB, sir_dB)
 
-                # Channel estimation
-                h_serving_est = self._run_channel_est(h_serving_true, snr_dB)
+                # Interference-aware channel estimation
+                from msg_embedding.data.sources._interference_estimation import (
+                    estimate_channel_with_interference,
+                    estimate_paired_channels,
+                )
+
+                intf_cell_ids = (
+                    [k for k in range(K) if k != serving_id] if K > 1 else None
+                )
+                n_intf_ues = max(1, K - 1)
+                paired = self.link == "BOTH"
+
+                h_ul_true_out: np.ndarray | None = None
+                h_ul_est_out: np.ndarray | None = None
+                h_dl_true_out: np.ndarray | None = None
+                h_dl_est_out: np.ndarray | None = None
+                ul_sir_db_out: float | None = None
+                dl_sir_db_out: float | None = None
+                n_intf_ues_out: int | None = None
+                link_pairing = "single"
+
+                rng_est = np.random.default_rng(self._seed + yielded)
+
+                if paired:
+                    paired_result = estimate_paired_channels(
+                        h_dl_true=h_serving_true,
+                        h_interferers_dl=h_interferers,
+                        serving_cell_id=serving_id,
+                        interferer_cell_ids=intf_cell_ids,
+                        snr_dB=snr_dB,
+                        rng=rng_est,
+                        est_mode=self.channel_est_mode,
+                        num_interfering_ues=n_intf_ues,
+                    )
+                    h_serving_est = paired_result["h_dl_est"]
+                    h_ul_true_out = paired_result["h_ul_true"]
+                    h_ul_est_out = paired_result["h_ul_est"]
+                    h_dl_true_out = paired_result["h_dl_true"]
+                    h_dl_est_out = paired_result["h_dl_est"]
+                    ul_sir_db_out = paired_result["ul_sir_dB"]
+                    dl_sir_db_out = paired_result["dl_sir_dB"]
+                    n_intf_ues_out = paired_result["num_interfering_ues"]
+                    link_pairing = "paired"
+                else:
+                    from msg_embedding.data.sources.internal_sim import (
+                        _generate_pilots_csirs,
+                        _generate_pilots_srs,
+                    )
+
+                    RB_est = h_serving_true.shape[1]
+                    if self.link == "UL":
+                        pilots = _generate_pilots_srs(RB_est, serving_id)
+                        direction = "UL"
+                    else:
+                        pilots = _generate_pilots_csirs(RB_est, serving_id)
+                        direction = "DL"
+
+                    est_result = estimate_channel_with_interference(
+                        h_serving_true=h_serving_true,
+                        h_interferers=h_interferers,
+                        pilots_serving=pilots,
+                        interferer_cell_ids=intf_cell_ids,
+                        direction=direction,  # type: ignore[arg-type]
+                        snr_dB=snr_dB,
+                        rng=rng_est,
+                        est_mode=self.channel_est_mode,
+                        serving_cell_id=serving_id,
+                        num_interfering_ues=n_intf_ues,
+                    )
+                    h_serving_est = est_result.h_est
 
                 # UE position
                 ue_pos: np.ndarray | None = None
@@ -357,18 +425,18 @@ class QuadrigaMultiSource(DataSource):
                 ssb_sinr = None
                 ssb_best_beam = None
                 ssb_pcis_list = None
+                ssb_rsrp_true = None
+                ssb_sinr_true = None
                 if self.enable_ssb:
                     try:
                         from msg_embedding.phy_sim.ssb_measurement import SSBMeasurement
 
                         pci_list = list(range(K))
-                        # Build h_per_cell list: [h_cell0, h_cell1, ...] each [T, RB, BS, UE]
                         h_cells = []
                         for k_idx in range(K):
                             if k_idx == serving_id:
                                 h_cells.append(h_serving_true)
                             else:
-                                # Find this cell in the interferer array
                                 other_idx_list = [kk for kk in range(K) if kk != serving_id]
                                 int_pos = other_idx_list.index(k_idx)
                                 h_cells.append(
@@ -390,6 +458,13 @@ class QuadrigaMultiSource(DataSource):
                         ssb_sinr = result.ss_sinr_dB.tolist()
                         ssb_best_beam = result.best_beam_idx.tolist()
                         ssb_pcis_list = pci_list
+
+                        if paired:
+                            result_ideal = meas.measure(
+                                h_per_cell=h_cells, pcis=pci_list, noise_power_lin=1e-30
+                            )
+                            ssb_rsrp_true = result_ideal.rsrp_dBm.tolist()
+                            ssb_sinr_true = result_ideal.ss_sinr_dB.tolist()
                     except Exception:
                         pass
 
@@ -416,6 +491,7 @@ class QuadrigaMultiSource(DataSource):
                     with contextlib.suppress(Exception):
                         sample_meta["bs_positions"] = np.asarray(bs_positions).tolist()
 
+                sample_link = "DL" if paired else self.link
                 yield ChannelSample(
                     h_serving_true=h_serving_true,
                     h_serving_est=h_serving_est,
@@ -424,7 +500,7 @@ class QuadrigaMultiSource(DataSource):
                     snr_dB=snr_dB,
                     sir_dB=sir_dB,
                     sinr_dB=sinr_dB,
-                    link=self.link,  # type: ignore[arg-type]
+                    link=sample_link,  # type: ignore[arg-type]
                     channel_est_mode=self.channel_est_mode,  # type: ignore[arg-type]
                     serving_cell_id=serving_id,
                     ue_position=ue_pos,
@@ -439,6 +515,16 @@ class QuadrigaMultiSource(DataSource):
                     ssb_sinr_dB=ssb_sinr,
                     ssb_best_beam_idx=ssb_best_beam,
                     ssb_pcis=ssb_pcis_list,
+                    link_pairing=link_pairing,  # type: ignore[arg-type]
+                    h_ul_true=h_ul_true_out,
+                    h_ul_est=h_ul_est_out,
+                    h_dl_true=h_dl_true_out,
+                    h_dl_est=h_dl_est_out,
+                    ul_sir_dB=ul_sir_db_out,
+                    dl_sir_dB=dl_sir_db_out,
+                    num_interfering_ues=n_intf_ues_out,
+                    ssb_rsrp_true_dBm=ssb_rsrp_true,
+                    ssb_sinr_true_dB=ssb_sinr_true,
                 )
                 yielded += 1
 

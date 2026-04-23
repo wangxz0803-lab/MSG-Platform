@@ -491,20 +491,28 @@ def _pad_real(vec: np.ndarray, target: int, fill: float = -160.0) -> np.ndarray:
 def _build_feat_dict(
     sample: ChannelSample,
     use_legacy_pmi: bool,
+    *,
+    h_ul_override: np.ndarray | None = None,
+    h_dl_override: np.ndarray | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build the 24-field feat dict (with batch dim 1) + context metadata.
+
+    When ``sample.link_pairing == "paired"``, UL-derived tokens (PDP, SRS,
+    DFT, RSRP) are computed from ``h_ul_est`` and DL-derived tokens (PMI,
+    CQI) from ``h_dl_est``.  Use ``h_ul_override`` / ``h_dl_override`` to
+    feed ground-truth channels for GT feature dicts.
 
     Produces exactly the 16 token fields + 8 gate fields expected by
     ``FeatureExtractor.forward()``:
 
     Tokens (16):
-        ``pdp_crop``        [1, 64]  float32
-        ``srs1``..``srs4``  [1, 64]  complex64
-        ``pmi1``..``pmi4``  [1, 64]  complex64
-        ``dft1``..``dft4``  [1, 64]  complex64
-        ``rsrp_srs``        [1, 64]  float32
-        ``rsrp_cb``          [1, 64]  float32
-        ``cell_rsrp``       [1, 16]  float32
+        ``pdp_crop``        [1, 64]  float32    — from UL channel
+        ``srs1``..``srs4``  [1, 64]  complex64  — from UL channel
+        ``pmi1``..``pmi4``  [1, 64]  complex64  — from DL channel
+        ``dft1``..``dft4``  [1, 64]  complex64  — from UL channel
+        ``rsrp_srs``        [1, 64]  float32    — from UL channel
+        ``rsrp_cb``          [1, 64]  float32   — from UL channel
+        ``cell_rsrp``       [1, 16]  float32    — from SSB
 
     Gates (8):
         ``srs_w1``..``srs_w4``  [1]  float32 — normalised singular values
@@ -512,31 +520,47 @@ def _build_feat_dict(
         ``srs_cb_sinr``         [1]  float32 — codebook SINR in dB
         ``cqi``                 [1]  int64   — channel quality index 0-15
     """
-    h = sample.h_serving_est  # [T, RB, BS, UE] complex64
+    # Select channels based on pairing mode
+    if h_ul_override is not None:
+        h_ul = h_ul_override
+    elif sample.link_pairing == "paired" and sample.h_ul_est is not None:
+        # h_ul_est stored as [T, RB, UE, BS]; transpose to [T, RB, BS, UE]
+        h_ul = sample.h_ul_est.transpose(0, 1, 3, 2)
+    else:
+        h_ul = sample.h_serving_est
+
+    if h_dl_override is not None:
+        h_dl = h_dl_override
+    elif sample.link_pairing == "paired" and sample.h_dl_est is not None:
+        h_dl = sample.h_dl_est
+    else:
+        h_dl = sample.h_serving_est
+
+    h = h_ul  # primary channel for dimensional reference
     t, rb, bs, ue = h.shape
 
     feat: dict[str, Any] = {}
 
     # =====================================================================
-    # Time-freq average channel: [BS, UE]  (used by PMI fallback, DFT beams)
+    # Time-freq averages for UL and DL channels
     # =====================================================================
-    h_avg = np.mean(h, axis=(0, 1))  # [BS, UE]
+    h_ul_avg = np.mean(h_ul, axis=(0, 1))  # [BS, UE] — UL spatial
+    h_dl_avg = np.mean(h_dl, axis=(0, 1))  # [BS, UE] — DL spatial
 
     # =====================================================================
     # Spatial covariance R_hh = E[h·h^H] with IIR temporal smoothing.
-    # Per time-slot outer products averaged over (RB, UE), then filtered
-    # across T with alpha=0.2.  Eigenvectors → SRS tokens.
+    # Computed from UL channel (BS receiver perspective).
     # =====================================================================
-    R_hh = _compute_spatial_covariance_iir(h, alpha=0.2)
+    R_hh = _compute_spatial_covariance_iir(h_ul, alpha=0.2)
     srs_cov_list, srs_cov_eigvals = _srs_from_covariance(R_hh)
 
-    # SVD of h_avg — still needed for PMI fallback (Vh right singular vectors).
-    _, sigma, vh_svd = _scipy_svd(h_avg, full_matrices=False)
+    # SVD of DL average — needed for PMI fallback (Vh right singular vectors).
+    _, sigma, vh_svd = _scipy_svd(h_dl_avg, full_matrices=False)
 
     # =====================================================================
-    # Token 0: PDP  [1, 64] float32
+    # Token 0: PDP  [1, 64] float32 — from UL channel
     # =====================================================================
-    pdp = _compute_pdp(h)
+    pdp = _compute_pdp(h_ul)
     feat["pdp_crop"] = torch.from_numpy(pdp).unsqueeze(0)
 
     # =====================================================================
@@ -561,22 +585,23 @@ def _build_feat_dict(
     # Tokens 5-8: PMI  [1, 64] complex64 each
     # =====================================================================
     if use_legacy_pmi:
-        # Reshape to legacy layout [BS, UE, T*RB, 1] for CsiChanProcFunc.
-        h_sim = h.transpose(2, 3, 0, 1).reshape(bs, ue, t * rb, 1)
+        # Reshape DL channel to legacy layout [BS, UE, T*RB, 1] for CsiChanProcFunc.
+        t_dl, rb_dl, bs_dl, ue_dl = h_dl.shape
+        h_sim = h_dl.transpose(2, 3, 0, 1).reshape(bs_dl, ue_dl, t_dl * rb_dl, 1)
         pmi_list, _, _ = _legacy_pmi_tokens(h_sim)
     else:
-        # DFT codebook search (Type-I single-panel, 3GPP 38.214)
-        pmi_list = _pmi_dft_codebook_search(h_avg)
+        # DFT codebook search (Type-I single-panel, 3GPP 38.214) on DL channel
+        pmi_list = _pmi_dft_codebook_search(h_dl_avg)
     for i, vec in enumerate(pmi_list, start=1):
         feat[f"pmi{i}"] = torch.from_numpy(_pad_bs(vec, _TX_ANT_NUM_MAX)).unsqueeze(0)
 
     # =====================================================================
-    # Tokens 9-12: DFT beams  [1, 64] complex64 each
-    # Top-4 energy DFT beams of h_avg.
+    # Tokens 9-12: DFT beams  [1, 64] complex64 each — from UL channel
+    # Top-4 energy DFT beams of UL h_avg.
     # =====================================================================
     n_dft = min(bs, _TX_ANT_NUM_MAX)
     dft_matrix = _compute_dft_matrix(n_dft)  # [N, N]
-    beam_response = dft_matrix @ h_avg[:n_dft, 0]  # [N] beam-domain channel
+    beam_response = dft_matrix @ h_ul_avg[:n_dft, 0]  # [N] beam-domain channel
     beam_power = np.abs(beam_response) ** 2  # [N] linear power per beam
 
     n_beams = min(4, n_dft)
@@ -591,9 +616,9 @@ def _build_feat_dict(
         feat[f"dft{i + 1}"] = torch.from_numpy(dft_padded).unsqueeze(0)
 
     # =====================================================================
-    # Token 13: rsrp_srs  [1, 64] float32 — per-antenna RSRP in dBm
+    # Token 13: rsrp_srs  [1, 64] float32 — per-antenna RSRP from UL
     # =====================================================================
-    rsrp_srs_raw = _compute_rsrp_srs(h)  # [BS] float32
+    rsrp_srs_raw = _compute_rsrp_srs(h_ul)  # [BS] float32
     rsrp_srs_pad = np.full(_TX_ANT_NUM_MAX, -160.0, dtype=np.float32)
     n_rs = min(bs, _TX_ANT_NUM_MAX)
     rsrp_srs_pad[:n_rs] = rsrp_srs_raw[:n_rs]
@@ -649,6 +674,7 @@ def _build_feat_dict(
         "rb": int(rb),
         "used_legacy_pmi": use_legacy_pmi,
         "sample_id": sample.sample_id,
+        "link_pairing": sample.link_pairing,
     }
 
     return feat, context
@@ -700,16 +726,35 @@ def sample_to_features(
         * ``'interference'`` — :func:`compute_interference_features` result.
         * ``'bridge_context'`` — source-of-truth metadata (bs_native, direct
           bypass flags, etc.).
+        * ``'gt_tokens'`` — ground-truth tokens from ideal channels (only
+          when ``link_pairing == "paired"``; ``None`` otherwise).
     """
     feat, context = _build_feat_dict(sample, use_legacy_pmi=use_legacy_pmi)
     intf = compute_interference_features(sample)
 
-    # Run the FeatureExtractor in eval mode; callers are free to switch modes.
     with torch.no_grad():
         tokens, norm_stats = feature_extractor(feat)
 
     norm_stats["interference"] = intf
     norm_stats["bridge_context"] = context
+
+    # GT tokens from ideal channels when paired
+    gt_tokens: torch.Tensor | None = None
+    if (
+        sample.link_pairing == "paired"
+        and sample.h_ul_true is not None
+        and sample.h_dl_true is not None
+    ):
+        feat_gt, _ = _build_feat_dict(
+            sample,
+            use_legacy_pmi=use_legacy_pmi,
+            h_ul_override=sample.h_ul_true.transpose(0, 1, 3, 2),
+            h_dl_override=sample.h_dl_true,
+        )
+        with torch.no_grad():
+            gt_tokens, _ = feature_extractor(feat_gt)
+    norm_stats["gt_tokens"] = gt_tokens
+
     return tokens, norm_stats
 
 

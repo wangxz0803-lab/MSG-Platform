@@ -54,6 +54,7 @@ NdArray = Annotated[np.ndarray, _NdarraySchema]
 # ---------------------------------------------------------------------------
 
 LinkType = Literal["UL", "DL"]
+LinkPairing = Literal["single", "paired"]
 ChannelEstMode = Literal["ideal", "ls_linear", "ls_mmse"]
 SourceType = Literal[
     "quadriga_single_legacy",
@@ -187,6 +188,43 @@ class ChannelSample(BaseModel):
         description="TDD slot pattern, e.g., 'DDDSU'.",
     )
 
+    # --- Paired UL/DL channels (interference-aware) -----------------------
+    link_pairing: LinkPairing = Field(
+        default="single",
+        description="'single': legacy mode (h_serving_est only). "
+        "'paired': UL+DL ideal/estimated channels populated.",
+    )
+    h_ul_true: NdArray | None = Field(
+        default=None,
+        description="[T, RB, BS_ant, UE_ant] complex64 ideal UL channel (BS perspective).",
+    )
+    h_ul_est: NdArray | None = Field(
+        default=None,
+        description="[T, RB, BS_ant, UE_ant] complex64 UL channel estimated with interference.",
+    )
+    h_dl_true: NdArray | None = Field(
+        default=None,
+        description="[T, RB, BS_ant, UE_ant] complex64 ideal DL channel.",
+    )
+    h_dl_est: NdArray | None = Field(
+        default=None,
+        description="[T, RB, BS_ant, UE_ant] complex64 DL channel estimated with interference.",
+    )
+    ul_sir_dB: float | None = Field(default=None, description="UL signal-to-interference ratio.")
+    dl_sir_dB: float | None = Field(default=None, description="DL signal-to-interference ratio.")
+    num_interfering_ues: int | None = Field(
+        default=None,
+        description="Number of interfering UEs in UL estimation.",
+    )
+    ssb_rsrp_true_dBm: list[float] | None = Field(
+        default=None,
+        description="Per-cell SS-RSRP under ideal conditions (no inter-cell interference).",
+    )
+    ssb_sinr_true_dB: list[float] | None = Field(
+        default=None,
+        description="Per-cell SS-SINR under ideal conditions.",
+    )
+
     # --- Provenance ------------------------------------------------------
     source: SourceType
     sample_id: str = Field(..., description="UUID4 string primary key.")
@@ -200,6 +238,10 @@ class ChannelSample(BaseModel):
         "h_serving_true",
         "h_serving_est",
         "h_interferers",
+        "h_ul_true",
+        "h_ul_est",
+        "h_dl_true",
+        "h_dl_est",
         mode="before",
     )
     @classmethod
@@ -300,6 +342,28 @@ class ChannelSample(BaseModel):
                     f"({self.interference_signal.shape[0]} vs {T})"
                 )
 
+        if self.link_pairing == "paired":
+            for name in ("h_ul_true", "h_ul_est", "h_dl_true", "h_dl_est"):
+                arr = getattr(self, name)
+                if arr is None:
+                    raise ValueError(
+                        f"link_pairing='paired' requires {name} to be set"
+                    )
+                if arr.ndim != 4:
+                    raise ValueError(f"{name} must be 4-D [T,RB,BS,UE], got {arr.shape}")
+            ul_t_shape = self.h_ul_true.shape  # type: ignore[union-attr]
+            if self.h_ul_est.shape != ul_t_shape:  # type: ignore[union-attr]
+                raise ValueError(
+                    f"h_ul_true and h_ul_est shape mismatch: "
+                    f"{ul_t_shape} vs {self.h_ul_est.shape}"  # type: ignore[union-attr]
+                )
+            dl_t_shape = self.h_dl_true.shape  # type: ignore[union-attr]
+            if self.h_dl_est.shape != dl_t_shape:  # type: ignore[union-attr]
+                raise ValueError(
+                    f"h_dl_true and h_dl_est shape mismatch: "
+                    f"{dl_t_shape} vs {self.h_dl_est.shape}"  # type: ignore[union-attr]
+                )
+
         return self
 
     # ------------------------------------------------------------------
@@ -322,6 +386,24 @@ class ChannelSample(BaseModel):
                 if self.interference_signal is not None
                 else None
             ),
+            "link_pairing": self.link_pairing,
+            "h_ul_true": (
+                _complex_to_pair(self.h_ul_true) if self.h_ul_true is not None else None
+            ),
+            "h_ul_est": (
+                _complex_to_pair(self.h_ul_est) if self.h_ul_est is not None else None
+            ),
+            "h_dl_true": (
+                _complex_to_pair(self.h_dl_true) if self.h_dl_true is not None else None
+            ),
+            "h_dl_est": (
+                _complex_to_pair(self.h_dl_est) if self.h_dl_est is not None else None
+            ),
+            "ul_sir_dB": self.ul_sir_dB,
+            "dl_sir_dB": self.dl_sir_dB,
+            "num_interfering_ues": self.num_interfering_ues,
+            "ssb_rsrp_true_dBm": self.ssb_rsrp_true_dBm,
+            "ssb_sinr_true_dB": self.ssb_sinr_true_dB,
             "noise_power_dBm": float(self.noise_power_dBm),
             "snr_dB": float(self.snr_dB),
             "sir_dB": None if self.sir_dB is None else float(self.sir_dB),
@@ -368,6 +450,16 @@ class ChannelSample(BaseModel):
             h_serving_est=_maybe_complex("h_serving_est"),
             h_interferers=_maybe_complex("h_interferers"),
             interference_signal=_maybe_complex("interference_signal"),
+            link_pairing=d.get("link_pairing", "single"),
+            h_ul_true=_maybe_complex("h_ul_true"),
+            h_ul_est=_maybe_complex("h_ul_est"),
+            h_dl_true=_maybe_complex("h_dl_true"),
+            h_dl_est=_maybe_complex("h_dl_est"),
+            ul_sir_dB=d.get("ul_sir_dB"),
+            dl_sir_dB=d.get("dl_sir_dB"),
+            num_interfering_ues=d.get("num_interfering_ues"),
+            ssb_rsrp_true_dBm=d.get("ssb_rsrp_true_dBm"),
+            ssb_sinr_true_dB=d.get("ssb_sinr_true_dB"),
             noise_power_dBm=d["noise_power_dBm"],
             snr_dB=d["snr_dB"],
             sir_dB=d.get("sir_dB"),
@@ -414,6 +506,10 @@ class ChannelSample(BaseModel):
             "sinr_dB": float(self.sinr_dB),
             "has_ssb_measurements": self.ssb_rsrp_dBm is not None,
             "has_interference_signal": self.interference_signal is not None,
+            "link_pairing": self.link_pairing,
+            "ul_sir_dB": self.ul_sir_dB,
+            "dl_sir_dB": self.dl_sir_dB,
+            "num_interfering_ues": self.num_interfering_ues,
             "channel_model": self.channel_model,
             "tdd_pattern": self.tdd_pattern,
             "ue_x": None if self.ue_position is None else float(self.ue_position[0]),
@@ -453,4 +549,4 @@ class ChannelSample(BaseModel):
         raise TypeError(f"{path}: expected ChannelSample or dict, got {type(payload).__name__}")
 
 
-__all__ = ["ChannelSample", "LinkType", "ChannelEstMode", "SourceType"]
+__all__ = ["ChannelSample", "LinkType", "LinkPairing", "ChannelEstMode", "SourceType"]
