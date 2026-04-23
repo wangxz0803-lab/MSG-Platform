@@ -141,6 +141,7 @@ def list_channels(
                     "channel_est_mode",
                     "serving_cell_id",
                     "num_interfering_ues",
+                    "mobility_mode",
                 )
             }
         except Exception:

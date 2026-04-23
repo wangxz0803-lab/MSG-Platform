@@ -13,6 +13,7 @@ export type JobType =
   | 'simulate';
 export type LinkType = 'UL' | 'DL';
 export type LinkPairing = 'single' | 'paired';
+export type MobilityMode = 'static' | 'linear' | 'random_walk' | 'random_waypoint';
 export type ModelFormat = 'pt' | 'onnx' | 'torchscript';
 
 export interface HealthResponse {
@@ -252,6 +253,7 @@ export interface ChannelSampleMeta {
   ssb_rsrp_dBm: number[];
   serving_cell_id: number;
   num_interfering_ues: number | null;
+  mobility_mode: MobilityMode | null;
 }
 
 export interface ChannelListItem {

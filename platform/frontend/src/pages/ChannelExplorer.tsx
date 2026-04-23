@@ -275,6 +275,11 @@ function DetailView({ sampleIndex, onBack }: { sampleIndex: number; onBack: () =
                     {meta.num_interfering_ues}
                   </Descriptions.Item>
                 )}
+                {meta.mobility_mode && (
+                  <Descriptions.Item label="运动模式">
+                    <Tag>{meta.mobility_mode}</Tag>
+                  </Descriptions.Item>
+                )}
                 <Descriptions.Item label="Position">
                   {meta.ue_position
                     ? `[${meta.ue_position.map((v) => formatNumber(v, 1)).join(', ')}]`

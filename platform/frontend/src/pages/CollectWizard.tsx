@@ -111,6 +111,12 @@ const UE_DISTRIBUTION_OPTIONS = [
   { label: '簇状分布', value: 'clustered' as const },
   { label: '热点分布', value: 'hotspot' as const },
 ];
+const MOBILITY_MODE_OPTIONS = [
+  { label: '静止', value: 'static' as const },
+  { label: '匀速直线', value: 'linear' as const },
+  { label: '随机游走', value: 'random_walk' as const },
+  { label: '随机航路点', value: 'random_waypoint' as const },
+];
 
 // ---------------------------------------------------------------------------
 // Form value interfaces
@@ -136,6 +142,8 @@ interface UEConfigValues {
   num_ue_tx_ant: number;
   num_ue_rx_ant: number;
   ue_speed_kmh: number;
+  mobility_mode: 'static' | 'linear' | 'random_walk' | 'random_waypoint';
+  sample_interval_s: number;
   ue_distribution: 'uniform' | 'clustered' | 'hotspot';
 }
 
@@ -162,6 +170,7 @@ interface QuadrigaRealValues {
   isd_m: number;
   tx_height_m: number;
   ue_speed_kmh: number;
+  mobility_mode: 'static' | 'linear' | 'random_walk' | 'random_waypoint';
   carrier_freq_hz: number;
   scenario: string;
   num_snapshots: number;
@@ -199,6 +208,8 @@ const DEFAULT_UE: UEConfigValues = {
   num_ue_tx_ant: 2,
   num_ue_rx_ant: 4,
   ue_speed_kmh: 3,
+  mobility_mode: 'static',
+  sample_interval_s: 0.0005,
   ue_distribution: 'uniform',
 };
 
@@ -224,6 +235,7 @@ const DEFAULT_QUADRIGA_REAL: QuadrigaRealValues = {
   isd_m: 500,
   tx_height_m: 25,
   ue_speed_kmh: 3,
+  mobility_mode: 'linear',
   carrier_freq_hz: 3_500_000_000,
   scenario: '3GPP_38.901_UMa_NLOS',
   num_snapshots: 14,
@@ -316,6 +328,9 @@ function bwLabel(hz: number): string {
 }
 function distLabel(val: string): string {
   return UE_DISTRIBUTION_OPTIONS.find((o) => o.value === val)?.label ?? val;
+}
+function mobilityLabel(val: string): string {
+  return MOBILITY_MODE_OPTIONS.find((o) => o.value === val)?.label ?? val;
 }
 function linkLabel(val: string): string {
   const map: Record<string, string> = { UL: '上行', DL: '下行', both: '双向' };
@@ -810,6 +825,18 @@ export default function CollectWizard() {
                       </Form.Item>
                     </Col>
                   </Row>
+                  <Row gutter={16}>
+                    <Col span={12}>
+                      <Form.Item
+                        label="运动模式"
+                        name="mobility_mode"
+                        tooltip="QuaDRiGa 原生支持轨迹建模，此参数传递给 MATLAB 端"
+                        rules={[{ required: true }]}
+                      >
+                        <Select options={MOBILITY_MODE_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
                 </Card>
 
                 <Card title="MATLAB 生成控制" size="small">
@@ -1049,6 +1076,16 @@ export default function CollectWizard() {
                   <Row gutter={16}>
                     <Col span={12}>
                       <Form.Item
+                        label="运动模式"
+                        name="mobility_mode"
+                        tooltip="静止=固定位置；匀速直线=恒速恒向；随机游走=每步随机转向（步行/车辆）；随机航路点=随机选目标点→匀速移动→到达后再选"
+                        rules={[{ required: true, message: '请选择运动模式' }]}
+                      >
+                        <Select options={MOBILITY_MODE_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item
                         label="移动速度 (km/h)"
                         name="ue_speed_kmh"
                         rules={[{ required: true, message: '请输入移动速度' }]}
@@ -1057,6 +1094,28 @@ export default function CollectWizard() {
                       </Form.Item>
                     </Col>
                   </Row>
+                  {ueConfig.mobility_mode !== 'static' && (
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <Form.Item
+                          label="采样间隔 (秒)"
+                          name="sample_interval_s"
+                          tooltip="相邻两个样本之间的时间间隔。0.5ms = 1 slot @ 30kHz SCS；1ms = 1 子帧；10ms = 1 帧"
+                        >
+                          <Select
+                            options={[
+                              { label: '0.5 ms (1 slot)', value: 0.0005 },
+                              { label: '1 ms (1 子帧)', value: 0.001 },
+                              { label: '5 ms', value: 0.005 },
+                              { label: '10 ms (1 帧)', value: 0.01 },
+                              { label: '100 ms', value: 0.1 },
+                              { label: '1 s', value: 1.0 },
+                            ]}
+                          />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  )}
                 </Form>
               </Card>
             </Space>
@@ -1342,6 +1401,7 @@ export default function CollectWizard() {
                     <Descriptions.Item label="站间距">{qrConfig.isd_m} m</Descriptions.Item>
                     <Descriptions.Item label="基站高度">{qrConfig.tx_height_m} m</Descriptions.Item>
                     <Descriptions.Item label="载波频率">{freqLabel(qrConfig.carrier_freq_hz)}</Descriptions.Item>
+                    <Descriptions.Item label="运动模式">{mobilityLabel(qrConfig.mobility_mode)}</Descriptions.Item>
                     <Descriptions.Item label="UE 速度">{qrConfig.ue_speed_kmh} km/h</Descriptions.Item>
                     <Descriptions.Item label="BS 天线">{qrConfig.bs_ant_v}V x {qrConfig.bs_ant_h}H = {qrConfig.bs_ant_v * qrConfig.bs_ant_h}</Descriptions.Item>
                     <Descriptions.Item label="UE 天线">{qrConfig.ue_ant_v}V x {qrConfig.ue_ant_h}H = {qrConfig.ue_ant_v * qrConfig.ue_ant_h}</Descriptions.Item>
@@ -1384,9 +1444,19 @@ export default function CollectWizard() {
                   <Descriptions column={2} size="small" bordered>
                     <Descriptions.Item label="用户数">{ueConfig.num_ues}</Descriptions.Item>
                     <Descriptions.Item label="天线配置">{ueConfig.num_ue_tx_ant}T{ueConfig.num_ue_rx_ant}R</Descriptions.Item>
+                    <Descriptions.Item label="运动模式">
+                      {mobilityLabel(ueConfig.mobility_mode)}
+                    </Descriptions.Item>
                     <Descriptions.Item label="移动速度">
                       {ueConfig.ue_speed_kmh} km/h
                     </Descriptions.Item>
+                    {ueConfig.mobility_mode !== 'static' && (
+                      <Descriptions.Item label="采样间隔">
+                        {ueConfig.sample_interval_s >= 0.001
+                          ? `${ueConfig.sample_interval_s * 1000} ms`
+                          : `${ueConfig.sample_interval_s * 1e6} μs`}
+                      </Descriptions.Item>
+                    )}
                     <Descriptions.Item label="用户分布">
                       {distLabel(ueConfig.ue_distribution)}
                     </Descriptions.Item>

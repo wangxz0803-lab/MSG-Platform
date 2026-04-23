@@ -154,6 +154,7 @@ class QuadrigaRealSource(DataSource):
             "rx_height_m": float(cfg.get("rx_height_m", 1.5)),
             "cell_radius_m": int(cfg.get("cell_radius_m", 250)),
             "ue_speed_kmh": int(cfg.get("ue_speed_kmh", 3)),
+            "mobility_mode": str(cfg.get("mobility_mode", "linear")),
             "bs_ant_v": int(cfg.get("bs_ant_v", 4)),
             "bs_ant_h": int(cfg.get("bs_ant_h", 8)),
             "ue_ant_v": int(cfg.get("ue_ant_v", 1)),

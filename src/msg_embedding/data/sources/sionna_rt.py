@@ -533,6 +533,13 @@ class SionnaRTSource(DataSource):
             }
             self.tx_power_dbm = _default_tx_power.get(self._pathloss_scenario, 43.0)
         self.ue_speed_kmh: float = float(_dict_get(cfg, "ue_speed_kmh", 3.0))
+        self.mobility_mode: str = str(_dict_get(cfg, "mobility_mode", "static"))
+        from ._mobility import MOBILITY_MODES as _MM
+        if self.mobility_mode not in _MM:
+            raise ValueError(
+                f"Unknown mobility_mode {self.mobility_mode!r}; expected one of {_MM}."
+            )
+        self.sample_interval_s: float = float(_dict_get(cfg, "sample_interval_s", 0.5e-3))
         self.ue_distribution: str = str(_dict_get(cfg, "ue_distribution", "uniform"))
         if self.ue_distribution not in {"uniform", "clustered", "hotspot"}:
             raise ValueError(
@@ -1054,6 +1061,8 @@ class SionnaRTSource(DataSource):
         link_override: str | None = None,
         pilot_override: str | None = None,
         paired: bool = False,
+        ue_pos_override: np.ndarray | None = None,
+        doppler_hz_override: float | None = None,
     ) -> ChannelSample:
         """Generate one physically meaningful ChannelSample.
 
@@ -1081,7 +1090,9 @@ class SionnaRTSource(DataSource):
         K = len(sites)
 
         # Place one UE (with retry for RT zero-channel cases)
-        if self.custom_ue_positions:
+        if ue_pos_override is not None:
+            ue_pos = ue_pos_override.copy()
+        elif self.custom_ue_positions:
             pos_idx = idx % len(self.custom_ue_positions)
             p = self.custom_ue_positions[pos_idx]
             ue_pos = np.array(
@@ -1095,14 +1106,17 @@ class SionnaRTSource(DataSource):
         # --- Compute channels -----------------------------------------------
         sionna_rt_used = False
         _MAX_RT_RETRIES = 5
+        # Preserve trajectory position for TDL fallback and metadata
+        ue_pos_canonical = ue_pos.copy()
 
         if self._use_real_sionna:
+            rt_ue_pos = ue_pos.copy()
             for _rt_attempt in range(_MAX_RT_RETRIES):
                 try:
                     h_all = self._compute_channels_sionna(
                         idx + _rt_attempt * 10000,
                         sites,
-                        ue_pos,
+                        rt_ue_pos,
                         T,
                         RB,
                         BS_ant,
@@ -1123,6 +1137,7 @@ class SionnaRTSource(DataSource):
                     # Check if serving channel has usable power
                     max_power = max(float(np.mean(np.abs(h) ** 2)) for h in h_all)
                     if max_power > 1e-20:
+                        ue_pos = rt_ue_pos
                         break
                     if _rt_attempt < _MAX_RT_RETRIES - 1:
                         logger.info(
@@ -1133,18 +1148,17 @@ class SionnaRTSource(DataSource):
                             idx,
                             max_power,
                         )
-                        # On retry, always use random placement (even with
-                        # custom_ue_positions) to escape dead-zone positions.
-                        retry_rng = np.random.default_rng(self._seed + idx + _rt_attempt + 1)
-                        cell_radius = self.isd_m / math.sqrt(3.0)
-                        num_rings = _sites_to_rings(self.num_cells)
-                        network_radius = max(cell_radius, self.isd_m * num_rings + cell_radius)
-                        ue_pos = _place_ues_uniform(
-                            retry_rng,
-                            1,
-                            network_radius,
-                            self.ue_height_m,
-                        )[0]
+                        if ue_pos_override is None:
+                            retry_rng = np.random.default_rng(self._seed + idx + _rt_attempt + 1)
+                            cell_radius = self.isd_m / math.sqrt(3.0)
+                            num_rings = _sites_to_rings(self.num_cells)
+                            network_radius = max(cell_radius, self.isd_m * num_rings + cell_radius)
+                            rt_ue_pos = _place_ues_uniform(
+                                retry_rng,
+                                1,
+                                network_radius,
+                                self.ue_height_m,
+                            )[0]
                     else:
                         logger.warning(
                             "RT: all %d attempts produced zero channels for sample %d, "
@@ -1152,6 +1166,7 @@ class SionnaRTSource(DataSource):
                             _MAX_RT_RETRIES,
                             idx,
                         )
+                        ue_pos = ue_pos_canonical
                         h_all, rx_power_dbm, noise_power_dbm = self._compute_channels_tdl(
                             rng,
                             sites,
@@ -1171,6 +1186,7 @@ class SionnaRTSource(DataSource):
                     )
                     if _rt_attempt == _MAX_RT_RETRIES - 1:
                         logger.warning("All RT attempts failed, falling back to TDL.")
+                        ue_pos = ue_pos_canonical
                         h_all, rx_power_dbm, noise_power_dbm = self._compute_channels_tdl(
                             rng,
                             sites,
@@ -1369,6 +1385,7 @@ class SionnaRTSource(DataSource):
             "subcarrier_spacing": self.subcarrier_spacing,
             "tx_power_dbm": self.tx_power_dbm,
             "ue_speed_kmh": self.ue_speed_kmh,
+            "mobility_mode": self.mobility_mode,
             "ue_distribution": self.ue_distribution,
             "pilot_type": effective_pilot,
             "scenario": self.scenario,
@@ -1443,15 +1460,62 @@ class SionnaRTSource(DataSource):
     def iter_samples(self) -> Iterator[ChannelSample]:
         sites = self._build_topology()
 
+        # -- Mobility: generate trajectory if mode is not static ---------------
+        trajectory_positions: np.ndarray | None = None
+        trajectory_dopplers: np.ndarray | None = None
+
+        if self.mobility_mode != "static" and self.ue_speed_kmh > 0:
+            from ._mobility import compute_doppler_from_trajectory, generate_trajectory
+
+            traj_rng = np.random.default_rng(self._seed + 9999)
+            init_pos = self._place_ues(traj_rng, sites, 1)[0]
+
+            cell_radius = self.isd_m / math.sqrt(3.0)
+            num_rings = _sites_to_rings(self.num_cells)
+            network_radius = max(cell_radius, self.isd_m * num_rings + cell_radius)
+
+            trajectory_positions = generate_trajectory(
+                rng=traj_rng,
+                start_pos=init_pos,
+                speed_kmh=self.ue_speed_kmh,
+                num_steps=self.num_samples,
+                dt_s=self.sample_interval_s,
+                mode=self.mobility_mode,
+                boundary_radius_m=network_radius,
+                boundary_center=np.zeros(2, dtype=np.float64),
+            )
+
+            serving_pos = np.asarray(sites[0].position, dtype=np.float64)
+            trajectory_dopplers = compute_doppler_from_trajectory(
+                positions=trajectory_positions,
+                bs_pos=serving_pos,
+                carrier_freq_hz=self.carrier_freq_hz,
+                dt_s=self.sample_interval_s,
+            )
+
         for idx in range(self.num_samples):
+            ue_pos_ov: np.ndarray | None = None
+            doppler_ov: float | None = None
+            if trajectory_positions is not None:
+                ue_pos_ov = trajectory_positions[idx]
+            if trajectory_dopplers is not None:
+                doppler_ov = float(np.abs(trajectory_dopplers[idx]))
+
             if self.link == "BOTH":
                 yield self._generate_one_sample(
                     idx,
                     sites,
                     paired=True,
+                    ue_pos_override=ue_pos_ov,
+                    doppler_hz_override=doppler_ov,
                 )
             else:
-                yield self._generate_one_sample(idx, sites)
+                yield self._generate_one_sample(
+                    idx,
+                    sites,
+                    ue_pos_override=ue_pos_ov,
+                    doppler_hz_override=doppler_ov,
+                )
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -1494,6 +1558,8 @@ class SionnaRTSource(DataSource):
             "bandwidth_hz": self.bandwidth_hz,
             "tx_power_dbm": self.tx_power_dbm,
             "ue_speed_kmh": self.ue_speed_kmh,
+            "mobility_mode": self.mobility_mode,
+            "sample_interval_s": self.sample_interval_s,
             "ue_distribution": self.ue_distribution,
             "srs": {
                 "group_hopping": self.srs_group_hopping,

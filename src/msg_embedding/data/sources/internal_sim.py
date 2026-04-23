@@ -577,6 +577,14 @@ class InternalSimSource(DataSource):
         self.tx_power_dbm: float = float(_dict_get(cfg, "tx_power_dbm", 43.0))
         self._tx_power_explicitly_set: bool = _dict_get(cfg, "tx_power_dbm", None) is not None
         self.ue_speed_kmh: float = float(_dict_get(cfg, "ue_speed_kmh", 3.0))
+        self.mobility_mode: str = str(_dict_get(cfg, "mobility_mode", "static"))
+        from ._mobility import MOBILITY_MODES
+        if self.mobility_mode not in MOBILITY_MODES:
+            raise ValueError(
+                f"Unknown mobility_mode {self.mobility_mode!r}; expected "
+                f"one of {MOBILITY_MODES}."
+            )
+        self.sample_interval_s: float = float(_dict_get(cfg, "sample_interval_s", 0.5e-3))
         self.ue_distribution: str = str(_dict_get(cfg, "ue_distribution", "uniform"))
         if self.ue_distribution not in {"uniform", "clustered", "hotspot"}:
             raise ValueError(
@@ -938,6 +946,8 @@ class InternalSimSource(DataSource):
         pilot_override: str | None = None,
         lsp_override: dict | None = None,
         paired: bool = False,
+        ue_pos_override: np.ndarray | None = None,
+        doppler_hz_override: float | None = None,
     ) -> ChannelSample:
         """Generate one physically meaningful ChannelSample."""
         rng = np.random.default_rng(self._seed + idx)
@@ -960,10 +970,13 @@ class InternalSimSource(DataSource):
         RB = self._num_rb
         K = len(sites)  # total number of cells (sites * sectors)
 
-        # Doppler frequency from UE speed
+        # Doppler frequency: prefer trajectory-derived value, then config-based
         wavelength = 3e8 / self.carrier_freq_hz
-        ue_speed_ms = self.ue_speed_kmh / 3.6
-        doppler_hz = ue_speed_ms / wavelength
+        if doppler_hz_override is not None:
+            doppler_hz = doppler_hz_override
+        else:
+            ue_speed_ms = self.ue_speed_kmh / 3.6
+            doppler_hz = ue_speed_ms / wavelength
 
         # Rician K-factor (linear)
         rician_k_linear = 10.0 ** (self.rician_k_db / 10.0) if self.rician_k_db > -50 else 0.0
@@ -990,8 +1003,11 @@ class InternalSimSource(DataSource):
         los_aoa = rng.uniform(-np.pi / 2, np.pi / 2)
 
         # -- Place one UE -----------------------------------------------------
-        ue_positions = self._place_ues(rng, sites, 1)
-        ue_pos = ue_positions[0]  # [3]
+        if ue_pos_override is not None:
+            ue_pos = ue_pos_override.copy()
+        else:
+            ue_positions = self._place_ues(rng, sites, 1)
+            ue_pos = ue_positions[0]  # [3]
 
         # -- LOS probability check (Fix 5) ------------------------------------
         # Find serving cell candidate (closest) for LOS check
@@ -1238,6 +1254,7 @@ class InternalSimSource(DataSource):
             "subcarrier_spacing": self.subcarrier_spacing,
             "tx_power_dbm": self.tx_power_dbm,
             "ue_speed_kmh": self.ue_speed_kmh,
+            "mobility_mode": self.mobility_mode,
             "ue_distribution": self.ue_distribution,
             "pilot_type": effective_pilot,
             "scenario": self.scenario,
@@ -1371,9 +1388,47 @@ class InternalSimSource(DataSource):
         """Yield :class:`ChannelSample` instances from the internal simulator."""
         sites = self._build_sites()
 
-        # Pre-generate spatially correlated LSPs for trajectory mode (Fix 9)
+        # -- Mobility: generate trajectory if mode is not static ---------------
+        trajectory_positions: np.ndarray | None = None
+        trajectory_dopplers: np.ndarray | None = None
+
+        if self.mobility_mode != "static" and self.ue_speed_kmh > 0:
+            from ._mobility import compute_doppler_from_trajectory, generate_trajectory
+
+            traj_rng = np.random.default_rng(self._seed + 9999)
+            # Place initial UE position
+            init_pos = self._place_ues(traj_rng, sites, 1)[0]
+
+            cell_radius = self.isd_m / math.sqrt(3.0)
+            num_rings = _sites_to_rings(self.num_sites)
+            network_radius = max(cell_radius, self.isd_m * num_rings + cell_radius)
+
+            trajectory_positions = generate_trajectory(
+                rng=traj_rng,
+                start_pos=init_pos,
+                speed_kmh=self.ue_speed_kmh,
+                num_steps=self.num_samples,
+                dt_s=self.sample_interval_s,
+                mode=self.mobility_mode,
+                boundary_radius_m=network_radius,
+                boundary_center=np.zeros(2, dtype=np.float64),
+            )
+
+            # Doppler relative to serving cell (use site 0 as rough reference)
+            serving_pos = np.asarray(sites[0].position, dtype=np.float64)
+            trajectory_dopplers = compute_doppler_from_trajectory(
+                positions=trajectory_positions,
+                bs_pos=serving_pos,
+                carrier_freq_hz=self.carrier_freq_hz,
+                dt_s=self.sample_interval_s,
+            )
+
+        # -- Custom positions: spatially correlated LSPs -----------------------
         trajectory_lsps: list[dict] | None = None
-        if self.custom_ue_positions and len(self.custom_ue_positions) > 1:
+        if trajectory_positions is not None:
+            traj_rng2 = np.random.default_rng(self._seed)
+            trajectory_lsps = self._generate_trajectory_lsps(traj_rng2, trajectory_positions)
+        elif self.custom_ue_positions and len(self.custom_ue_positions) > 1:
             positions = np.array(
                 [
                     [
@@ -1384,28 +1439,37 @@ class InternalSimSource(DataSource):
                     for p in self.custom_ue_positions
                 ]
             )
-            traj_rng = np.random.default_rng(self._seed)
-            trajectory_lsps = self._generate_trajectory_lsps(traj_rng, positions)
+            traj_rng2 = np.random.default_rng(self._seed)
+            trajectory_lsps = self._generate_trajectory_lsps(traj_rng2, positions)
 
         for idx in range(self.num_samples):
             lsp_override = None
             if trajectory_lsps is not None and idx < len(trajectory_lsps):
                 lsp_override = trajectory_lsps[idx]
 
+            ue_pos_ov: np.ndarray | None = None
+            doppler_ov: float | None = None
+            if trajectory_positions is not None:
+                ue_pos_ov = trajectory_positions[idx]
+            if trajectory_dopplers is not None:
+                doppler_ov = float(np.abs(trajectory_dopplers[idx]))
+
             if self.link == "BOTH":
-                # Paired mode: single sample with both UL and DL channels,
-                # each estimated with direction-appropriate interference.
                 yield self._generate_one_sample(
                     idx,
                     sites,
                     lsp_override=lsp_override,
                     paired=True,
+                    ue_pos_override=ue_pos_ov,
+                    doppler_hz_override=doppler_ov,
                 )
             else:
                 yield self._generate_one_sample(
                     idx,
                     sites,
                     lsp_override=lsp_override,
+                    ue_pos_override=ue_pos_ov,
+                    doppler_hz_override=doppler_ov,
                 )
 
     # ------------------------------------------------------------------
@@ -1450,6 +1514,8 @@ class InternalSimSource(DataSource):
             "bandwidth_hz": self.bandwidth_hz,
             "tx_power_dbm": self.tx_power_dbm,
             "ue_speed_kmh": self.ue_speed_kmh,
+            "mobility_mode": self.mobility_mode,
+            "sample_interval_s": self.sample_interval_s,
             "ue_distribution": self.ue_distribution,
             "channel_model": {
                 "num_taps": self.num_taps,

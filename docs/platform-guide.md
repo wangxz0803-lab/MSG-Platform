@@ -46,6 +46,28 @@ MSG-Embedding 平台是 5G NR 信道表征学习系统的 Web 界面，基于 Fa
 - **SRS 参数**：组跳频、序列跳频、周期、频域跳频
 - **SSB 波束数**：4 / 8 / 16
 
+### 移动性建模
+
+| 运动模式 | 说明 | 适用场景 |
+|----------|------|----------|
+| static | 静止，UE 位置固定 | 室内固定终端、基准测试 |
+| linear | 匀速直线运动，随机方向 | 高速公路、直线道路 |
+| random_walk | 随机游走，每步随机转向（高斯） | 步行用户、城市漫游 |
+| random_waypoint | 随机航路点（选目标→匀速移动→到达→再选） | 通用移动场景、RWP 标准模型 |
+
+**核心机制：**
+- 轨迹生成模块 (`_mobility.py`) 为每个 UE 生成 `[num_samples, 3]` 的连续位置序列
+- 多普勒频移从位置差分自动推导（径向速度），非恒定值
+- 大尺度参数（时延扩展、阴影衰落）沿轨迹空间相关：`corr(d) = exp(-d / d_decorr)`
+- 边界约束：UE 不会跑出网络覆盖范围（反射式边界）
+- 采样间隔可配置（默认 0.5ms = 1 slot @ 30kHz SCS）
+
+**数据源支持：**
+- internal_sim：Python 端完整轨迹建模 + 空间 LSP 相关
+- sionna_rt：Python 端轨迹 + Sionna RT 信道计算（或 TDL 回退）
+- quadriga_real：移动性参数传递给 MATLAB QuaDRiGa 引擎（原生轨迹支持）
+- quadriga_multi：数据中已包含移动性信息（由 MATLAB 预生成）
+
 ## 数据集管理
 
 ### 数据集列表（/datasets）
