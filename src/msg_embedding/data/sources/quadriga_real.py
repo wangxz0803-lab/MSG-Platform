@@ -139,14 +139,14 @@ class QuadrigaRealSource(DataSource):
         self.seed = int(cfg.get("seed", 42))
         self.skip_generation = bool(cfg.get("skip_generation", False))
 
-        repo = Path(cfg.get("repo_root", os.environ.get("MSG_REPO_ROOT", "D:/MSG")))
-        # Prefer local matlab/ (supports mobility_mode); fall back to source repo
-        _local_matlab = Path(__file__).resolve().parents[4] / "matlab"
+        _project_root = Path(__file__).resolve().parents[4]
+        repo = Path(cfg.get("repo_root", os.environ.get("MSG_REPO_ROOT", str(_project_root))))
+        _local_matlab = _project_root / "matlab"
         if _local_matlab.is_dir() and (_local_matlab / "main_multi.m").is_file():
             self.matlab_dir = _local_matlab
         else:
             self.matlab_dir = repo / "matlab"
-        self.mat_dir = Path(str(cfg.get("mat_dir", str(repo / "artifacts" / "quadriga_real_mat"))))
+        self.mat_dir = Path(str(cfg.get("mat_dir", str(_project_root / "artifacts" / "quadriga_real_mat"))))
 
         self._matlab_config = {
             "num_cells": self.num_cells,
