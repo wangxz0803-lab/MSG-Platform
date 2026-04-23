@@ -140,7 +140,12 @@ class QuadrigaRealSource(DataSource):
         self.skip_generation = bool(cfg.get("skip_generation", False))
 
         repo = Path(cfg.get("repo_root", os.environ.get("MSG_REPO_ROOT", "D:/MSG")))
-        self.matlab_dir = repo / "matlab"
+        # Prefer local matlab/ (supports mobility_mode); fall back to source repo
+        _local_matlab = Path(__file__).resolve().parents[4] / "matlab"
+        if _local_matlab.is_dir() and (_local_matlab / "main_multi.m").is_file():
+            self.matlab_dir = _local_matlab
+        else:
+            self.matlab_dir = repo / "matlab"
         self.mat_dir = Path(str(cfg.get("mat_dir", str(repo / "artifacts" / "quadriga_real_mat"))))
 
         self._matlab_config = {
@@ -248,9 +253,9 @@ class QuadrigaRealSource(DataSource):
                 h_ideal = np.transpose(Hf_ideal[i_ue], (3, 2, 0, 1))
                 h_est = np.transpose(Hf_est[i_ue], (3, 2, 0, 1))
 
-                snr_dB = float(np.clip(mat_snr[i_ue], -50, 50))
-                sir_dB = float(np.clip(mat_sir[i_ue], -50, 50))
-                sinr_dB = float(np.clip(mat_sinr[i_ue], -50, 50))
+                snr_dB = float(np.nan_to_num(np.clip(mat_snr[i_ue], -50, 50), nan=50.0))
+                sir_dB = float(np.nan_to_num(np.clip(mat_sir[i_ue], -50, 50), nan=50.0))
+                sinr_dB = float(np.nan_to_num(np.clip(mat_sinr[i_ue], -50, 50), nan=50.0))
 
                 raw_gain = np.mean(np.abs(h_ideal) ** 2)
                 if raw_gain > 0:
@@ -289,6 +294,8 @@ class QuadrigaRealSource(DataSource):
                         "isd_m": self.isd_m,
                         "scenario": self.scenario,
                         "carrier_freq_hz": self.carrier_freq_hz,
+                        "ue_speed_kmh": self._matlab_config.get("ue_speed_kmh", 0),
+                        "mobility_mode": self._matlab_config.get("mobility_mode", "linear"),
                         "shard": shard_num,
                         "ue_idx": i_ue,
                     },
