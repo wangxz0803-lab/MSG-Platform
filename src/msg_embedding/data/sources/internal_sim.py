@@ -636,9 +636,7 @@ class InternalSimSource(DataSource):
         if not self._tx_power_explicitly_set:
             _default_tx_power = {
                 "UMa_NLOS": 43.0,
-                "UMa_LOS": 43.0,
                 "UMi_NLOS": 33.0,
-                "UMi_LOS": 33.0,
                 "InF": 24.0,
             }
             self.tx_power_dbm = _default_tx_power.get(self.scenario, 43.0)
