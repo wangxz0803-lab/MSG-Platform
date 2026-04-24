@@ -1213,6 +1213,42 @@ class SionnaRTSource(DataSource):
             noise_power_dbm = self._noise_power_dbm()
             # rx_power_dbm already set by _compute_channels_tdl
 
+        # --- Patch RT interferer channels that are near-zero ----------------
+        # RT may find no ray paths for distant cells, giving near-zero
+        # channels. Replace with TDL channels at path-loss-model power so
+        # interference estimation can produce meaningful SIR gradients.
+        if sionna_rt_used and K > 1:
+            _s_idx = int(np.argmax(rx_power_dbm))
+            _p_serv = 10.0 ** (rx_power_dbm[_s_idx] / 10.0)
+            for _k in range(K):
+                if _k == _s_idx:
+                    continue
+                _p_k = 10.0 ** (rx_power_dbm[_k] / 10.0)
+                if _p_serv > 1e-30 and _p_k / _p_serv < 1e-5:
+                    bs_pos_k = np.asarray(sites[_k].position, dtype=np.float64)
+                    _pl_db, _ = self._compute_pathloss(rng, bs_pos_k, ue_pos)
+                    _exp_rx = self.tx_power_dbm - _pl_db
+                    _exp_lin = 10.0 ** (_exp_rx / 10.0)
+                    _rel_amp = math.sqrt(max(_exp_lin / (_p_serv + 1e-30), 1e-15))
+                    _tdl_rng = np.random.default_rng(self._seed + idx + _k * 7777)
+                    _wl = 3e8 / self.carrier_freq_hz
+                    _dop = (self.ue_speed_kmh / 3.6) / _wl
+                    _ric = 10.0 ** (self.rician_k_db / 10.0) if self.rician_k_db > -50 else 0.0
+                    _h_tdl = _generate_tdl_channel(
+                        rng=_tdl_rng,
+                        num_ofdm_sym=T,
+                        num_rb=RB,
+                        num_tx_ant=BS_ant,
+                        num_rx_ant=UE_ant,
+                        tau_rms_ns=self.tau_rms_ns,
+                        subcarrier_spacing_hz=self.subcarrier_spacing,
+                        doppler_hz=_dop,
+                        rician_k_linear=_ric,
+                        tdl_profile=self._tdl_profile,
+                    )
+                    h_all[_k] = (_h_tdl * _rel_amp).astype(np.complex64)
+                    rx_power_dbm[_k] = _exp_rx
+
         # --- Select serving cell (strongest received power) ------------------
         serving_idx = int(np.argmax(rx_power_dbm))
         serving_pci = getattr(sites[serving_idx], "pci", serving_idx)
@@ -1266,7 +1302,7 @@ class SionnaRTSource(DataSource):
             if interferer_indices
             else None
         )
-        n_intf_ues = max(1, self.num_ues - 1)
+        n_intf_ues = self.num_interfering_ues
 
         h_ul_true_out: np.ndarray | None = None
         h_ul_est_out: np.ndarray | None = None
@@ -1322,6 +1358,11 @@ class SionnaRTSource(DataSource):
                 num_interfering_ues=n_intf_ues,
             )
             h_serving_est = est_result.h_est
+            if est_result.sir_dB is not None:
+                sir_db = _clamp_db(est_result.sir_dB)
+                sinr_db = _clamp_db(
+                    -10.0 * math.log10(10.0 ** (-snr_db / 10.0) + 10.0 ** (-sir_db / 10.0))
+                )
 
         # Legacy interference signal (observed at receiver)
         interference_signal: np.ndarray | None = None

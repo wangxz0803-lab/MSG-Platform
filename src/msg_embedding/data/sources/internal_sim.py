@@ -1137,7 +1137,7 @@ class InternalSimSource(DataSource):
         intf_cell_ids = (
             [sites[k].pci for k in interferer_indices] if interferer_indices else None
         )
-        n_intf_ues = max(1, self.num_ues - 1)
+        n_intf_ues = self.num_interfering_ues
 
         h_ul_true_out: np.ndarray | None = None
         h_ul_est_out: np.ndarray | None = None
@@ -1193,6 +1193,11 @@ class InternalSimSource(DataSource):
                 num_interfering_ues=n_intf_ues,
             )
             h_serving_est = est_result.h_est
+            if est_result.sir_dB is not None:
+                sir_db = _clamp_db(est_result.sir_dB)
+                sinr_db = _clamp_db(
+                    -10.0 * math.log10(10.0 ** (-snr_db / 10.0) + 10.0 ** (-sir_db / 10.0))
+                )
 
         # Legacy interference signal (observed at receiver)
         interference_signal: np.ndarray | None = None
