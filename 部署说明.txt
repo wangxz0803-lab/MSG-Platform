@@ -1,0 +1,52 @@
+MSG平台 部署说明
+================
+
+【最简部署：只需要 Python】
+
+  前提：目标机器装了 Python 3.10+（推荐 3.12）
+
+  Windows:  双击 "一键启动.bat"
+  Linux:    bash start.sh
+
+  首次启动会自动创建虚拟环境、安装依赖、初始化数据库。
+  启动后浏览器访问 http://localhost:8000
+
+  前端已预编译在 platform/frontend/dist/ 中，无需 Node.js。
+  数据库用 SQLite，无需额外数据库服务。
+  任务用后台线程执行，无需 Redis。
+
+
+【可选功能】
+
+  1. QuaDRiGa 信道生成 → 需要 MATLAB R2023a+
+     设置环境变量: MSG_MATLAB_EXE=C:\...\matlab.exe
+
+  2. Sionna 射线追踪 → 需要额外安装
+     .venv\Scripts\pip install sionna>=2.0
+
+  3. GPU 加速 → 需要 CUDA + 对应版本 PyTorch
+     .venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu118
+
+  4. 修改端口 → 设置环境变量 MSG_API_PORT=9000
+
+
+【离线部署（公司无外网）】
+
+  在有网的机器上提前下载依赖包:
+    pip download -d ./offline_packages -e ".[platform]"
+
+  拷贝整个文件夹到内网机器后:
+    pip install --no-index --find-links=./offline_packages -e ".[platform]"
+
+
+【目录结构】
+
+  MSG平台_cc/
+  ├── 一键启动.bat          ← Windows 启动
+  ├── start.sh              ← Linux 启动
+  ├── src/                  ← Python 核心代码
+  ├── platform/backend/     ← FastAPI 后端
+  ├── platform/frontend/    ← React 前端（dist/ 已编译）
+  ├── matlab/               ← QuaDRiGa MATLAB 脚本
+  ├── configs/              ← 配置文件
+  └── artifacts/            ← 运行时产物（自动创建）

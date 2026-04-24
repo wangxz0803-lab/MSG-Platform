@@ -31,8 +31,6 @@ platform = [
     "uvicorn[standard]>=0.27",
     "sqlalchemy>=2.0",
     "alembic>=1.13",
-    "dramatiq[redis]>=1.17",
-    "redis>=5.0",
 ]
 dev = [
     "ruff>=0.6",

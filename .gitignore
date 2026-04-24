@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-dist/
+# dist/  # Python sdist/bdist, 不排除前端 dist
 build/
 *.egg
 
@@ -48,7 +48,7 @@ htmlcov/
 
 # Node
 node_modules/
-platform/frontend/dist/
+# platform/frontend/dist/  # 保留编译产物，方便部署拷贝
 
 # Model weights
 *.pth
