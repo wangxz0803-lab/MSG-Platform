@@ -826,10 +826,10 @@ class InternalSimSource(DataSource):
     # Noise floor
     # ------------------------------------------------------------------
     def _noise_power_dbm(self) -> float:
-        """Thermal noise power in dBm: kTB + NF."""
-        # kT at 290 K in dBm/Hz = -174 dBm/Hz
+        """Per-RB thermal noise power in dBm: kT·(12·SCS) + NF."""
         k_t_dbm_hz = -174.0
-        bw_db = 10.0 * math.log10(self.bandwidth_hz) if self.bandwidth_hz > 0 else 0.0
+        bw_per_rb = 12.0 * self.subcarrier_spacing
+        bw_db = 10.0 * math.log10(bw_per_rb) if bw_per_rb > 0 else 0.0
         return k_t_dbm_hz + bw_db + self.noise_figure_db
 
     # ------------------------------------------------------------------

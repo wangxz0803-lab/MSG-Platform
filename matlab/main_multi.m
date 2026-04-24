@@ -270,7 +270,7 @@ function main_multi(config_path)
     end
     Ptx_UE_dBm = 23;
     Ptx_BS_W = 10^(Ptx_BS_dBm / 10) * 1e-3;      % 39.81 W
-    noise_dBm = -174 + 5 + 10*log10(bandwidth);   % thermal noise over BW
+    noise_dBm = -174 + 5 + 10*log10(12 * sc_inter);  % per-RB thermal noise
     noise_W   = 10^(noise_dBm / 10) * 1e-3;
 
     % SRS configuration for UL channel estimation
