@@ -78,6 +78,12 @@ function [cn, c_builder, Hf_per_cell] = gen_channel_multicell(s1, a_BS, a_mt, ..
     Hf_per_cell = zeros(num_cells, BS_ant, ue_ant, N_RB, no_ss, 'single');
     for k = 1:num_cells
         Hf_temp = cn(1, k).fr(bandwidth, N_RB, [], device); % [rx, tx, sc, slot]
+        % Static mode: QuaDRiGa may return fewer snapshots than requested.
+        % A stationary channel is time-invariant, so replicate to fill no_ss.
+        actual_ss = size(Hf_temp, 4);
+        if actual_ss < no_ss
+            Hf_temp = repmat(Hf_temp(:,:,:,1), [1 1 1 no_ss]);
+        end
         % Follow legacy reshape path (legacy used only k=1):
         % The BS array is dual-pol cross-pol: tx dim = 2 * Nt_v * Nt_h.
         Hf_temp = reshape(Hf_temp, ue_ant, 2, Nt_v, Nt_h, N_RB, no_ss);

@@ -166,7 +166,8 @@ function main_multi(config_path)
     % ------------------------------------------------------------------
     s1 = qd_simulation_parameters;
     s1.center_frequency = fc;
-    s1.set_speed(ue_speed_kmh, T_snapshots);
+    % Guard against zero speed: use 1e-3 km/h floor to avoid Inf samples_per_meter
+    s1.set_speed(max(ue_speed_kmh, 1e-3), T_snapshots);
     s1.use_random_initial_phase = true;
     s1.use_3GPP_baseline = 1;
     s1.show_progress_bars = 0;
