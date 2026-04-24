@@ -474,6 +474,7 @@ class SionnaRTSource(DataSource):
             self.num_cells = 7
 
         self.num_ues: int = int(_dict_get(cfg, "num_ues", 1))
+        self.num_interfering_ues: int = int(_dict_get(cfg, "num_interfering_ues", max(self.num_ues - 1, 0)))
         self.num_samples: int = int(_dict_get(cfg, "num_samples", 1))
 
         # -- Topology params ---------------------------------------------------

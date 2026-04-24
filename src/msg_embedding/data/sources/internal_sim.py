@@ -192,6 +192,8 @@ def _generate_tdl_channel(
     los_aod_rad: float = 0.0,
     los_aoa_rad: float = 0.0,
     spatial_corr_rho: float = 0.7,
+    fading_seed: int | None = None,
+    t_offset_s: float = 0.0,
 ) -> np.ndarray:
     """Generate a frequency-domain channel matrix via a tapped-delay-line model.
 
@@ -251,8 +253,11 @@ def _generate_tdl_channel(
     L_rx = np.linalg.cholesky(R_rx)  # [N_rx, N_rx]
 
     # --- Per-tap complex gains -------------------------------------------
-    h_taps_real = rng.standard_normal((L, 1, N_tx, N_rx))
-    h_taps_imag = rng.standard_normal((L, 1, N_tx, N_rx))
+    # When fading_seed is set, use a deterministic RNG so that tap gains
+    # and Doppler SoS parameters are identical across snapshots.
+    fading_rng = np.random.default_rng(fading_seed) if fading_seed is not None else rng
+    h_taps_real = fading_rng.standard_normal((L, 1, N_tx, N_rx))
+    h_taps_imag = fading_rng.standard_normal((L, 1, N_tx, N_rx))
     h_taps_iid = (h_taps_real + 1j * h_taps_imag) / math.sqrt(2.0)
 
     # Apply spatial correlation: H_corr = L_rx @ H_iid @ L_tx^T per tap
@@ -289,12 +294,12 @@ def _generate_tdl_channel(
     if doppler_hz > 0 and T > 1:
         N_sinusoids = 16  # number of sinusoids per tap for Jakes spectrum
         T_sym = 1.0 / subcarrier_spacing_hz
-        t_axis = np.arange(T, dtype=np.float64) * T_sym  # [T]
+        t_axis = t_offset_s + np.arange(T, dtype=np.float64) * T_sym  # [T]
 
         for l_idx in range(L):
             # Sum-of-sinusoids: sum_n cos(2*pi*f_d*cos(alpha_n)*t + phi_n)
-            alpha_n = rng.uniform(0, 2 * np.pi, size=N_sinusoids)  # arrival angles
-            phi_n = rng.uniform(0, 2 * np.pi, size=N_sinusoids)  # random phases
+            alpha_n = fading_rng.uniform(0, 2 * np.pi, size=N_sinusoids)  # arrival angles
+            phi_n = fading_rng.uniform(0, 2 * np.pi, size=N_sinusoids)  # random phases
             # Real and imaginary parts for complex Doppler process
             doppler_real = np.zeros(T, dtype=np.float64)
             doppler_imag = np.zeros(T, dtype=np.float64)
@@ -542,6 +547,7 @@ class InternalSimSource(DataSource):
             self.num_sites = 7
 
         self.num_ues: int = int(_dict_get(cfg, "num_ues", 5))
+        self.num_interfering_ues: int = int(_dict_get(cfg, "num_interfering_ues", max(self.num_ues - 1, 0)))
         self.num_samples: int = int(_dict_get(cfg, "num_samples", 10))
         self.isd_m: float = float(_dict_get(cfg, "isd_m", 500.0))
         self.sectors_per_site: int = int(_dict_get(cfg, "sectors_per_site", 3))
@@ -804,10 +810,13 @@ class InternalSimSource(DataSource):
         rng: np.random.Generator,
         bs_pos: np.ndarray,
         ue_pos: np.ndarray,
+        sf_override_db: float | None = None,
     ) -> tuple[float, float]:
-        """Return ``(pathloss_dB, shadow_dB)`` for one BS→UE link.
+        """Return ``(pathloss_dB, d_3d)`` for one BS→UE link.
 
         ``bs_pos`` and ``ue_pos`` are 3D position vectors [x, y, z].
+        ``sf_override_db``: if set, use this shadow fading value instead
+        of drawing a new one from ``rng``.
         """
         d_3d = float(np.linalg.norm(bs_pos - ue_pos))
         d_3d = max(d_3d, 1.0)  # Minimum distance guard
@@ -817,7 +826,10 @@ class InternalSimSource(DataSource):
 
         pl_func = _PATHLOSS_MODELS[self.scenario]
         pl_db, sigma_sf = pl_func(d_3d, fc_ghz, h_bs, h_ut)
-        shadow_db = float(rng.normal(0, sigma_sf))
+        if sf_override_db is not None:
+            shadow_db = sf_override_db
+        else:
+            shadow_db = float(rng.normal(0, sigma_sf))
         return pl_db + shadow_db, d_3d
 
     # ------------------------------------------------------------------
@@ -946,6 +958,8 @@ class InternalSimSource(DataSource):
         paired: bool = False,
         ue_pos_override: np.ndarray | None = None,
         doppler_hz_override: float | None = None,
+        fading_seed: int | None = None,
+        snapshot_t_offset_s: float = 0.0,
     ) -> ChannelSample:
         """Generate one physically meaningful ChannelSample."""
         rng = np.random.default_rng(self._seed + idx)
@@ -980,9 +994,10 @@ class InternalSimSource(DataSource):
         rician_k_linear = 10.0 ** (self.rician_k_db / 10.0) if self.rician_k_db > -50 else 0.0
 
         # -- Sample per-drop LSPs from 38.901 Table 7.5-6 (Fix 1) -----------
+        sf_override_db: float | None = None
         if lsp_override is not None:
             sample_tau_rms_ns = lsp_override["tau_rms_ns"]
-            lsp_override.get("sf_db", 0.0)
+            sf_override_db = lsp_override.get("sf_db", None)
         else:
             lsp_params = _LSP_TABLE_38901.get(self.scenario)
             if lsp_params is not None:
@@ -997,8 +1012,11 @@ class InternalSimSource(DataSource):
         spatial_rho = _SCENARIO_SPATIAL_RHO.get(self.scenario, 0.7)
 
         # -- LOS AoD/AoA for steering vectors (Fix 2) ------------------------
-        los_aod = rng.uniform(-np.pi / 2, np.pi / 2)
-        los_aoa = rng.uniform(-np.pi / 2, np.pi / 2)
+        # For mobility sequences, use deterministic fading RNG so that LOS
+        # angles and LOS decision are consistent across snapshots.
+        env_rng = np.random.default_rng(fading_seed) if fading_seed is not None else rng
+        los_aod = env_rng.uniform(-np.pi / 2, np.pi / 2)
+        los_aoa = env_rng.uniform(-np.pi / 2, np.pi / 2)
 
         # -- Place one UE -----------------------------------------------------
         if ue_pos_override is not None:
@@ -1016,7 +1034,7 @@ class InternalSimSource(DataSource):
         _closest_idx = int(np.argmin(_dists_2d))
         d_2d_serving = max(_dists_2d[_closest_idx], 1.0)
         p_los = _los_probability(self.scenario, d_2d_serving)
-        is_los = rng.random() < p_los
+        is_los = env_rng.random() < p_los
 
         # Select TDL profile based on LOS/NLOS
         effective_tdl = self._tdl_profile
@@ -1040,13 +1058,14 @@ class InternalSimSource(DataSource):
 
         for k, site in enumerate(sites):
             bs_pos = np.asarray(site.position, dtype=np.float64)
-            pl_db, d_3d = self._compute_pathloss(rng, bs_pos, ue_pos)
+            pl_db, d_3d = self._compute_pathloss(rng, bs_pos, ue_pos, sf_override_db=sf_override_db)
             pl_all[k] = pl_db
 
             # Received power in dBm
             rx_power_dbm[k] = self.tx_power_dbm - pl_db
 
             # Generate small-scale fading channel using selected TDL profile
+            cell_fading_seed = (fading_seed + k) if fading_seed is not None else None
             h_k = _generate_tdl_channel(
                 rng=rng,
                 num_taps=self.num_taps,
@@ -1062,6 +1081,8 @@ class InternalSimSource(DataSource):
                 los_aod_rad=los_aod,
                 los_aoa_rad=los_aoa,
                 spatial_corr_rho=spatial_rho,
+                fading_seed=cell_fading_seed,
+                t_offset_s=snapshot_t_offset_s,
             )
 
             # Keep channel normalised (unit avg power per element).
@@ -1456,6 +1477,11 @@ class InternalSimSource(DataSource):
             traj_rng2 = np.random.default_rng(self._seed)
             trajectory_lsps = self._generate_trajectory_lsps(traj_rng2, positions)
 
+        # Fading seed for temporal continuity across snapshots in mobility mode
+        mobility_fading_seed: int | None = None
+        if trajectory_positions is not None:
+            mobility_fading_seed = self._seed + 7777
+
         for idx in range(self.num_samples):
             lsp_override = None
             if trajectory_lsps is not None and idx < len(trajectory_lsps):
@@ -1470,6 +1496,8 @@ class InternalSimSource(DataSource):
             if trajectory_dopplers is not None:
                 doppler_ov = float(np.abs(trajectory_dopplers[idx]))
 
+            t_offset = idx * self.sample_interval_s if mobility_fading_seed is not None else 0.0
+
             if self.link == "BOTH":
                 yield self._generate_one_sample(
                     idx,
@@ -1478,6 +1506,8 @@ class InternalSimSource(DataSource):
                     paired=True,
                     ue_pos_override=ue_pos_ov,
                     doppler_hz_override=doppler_ov,
+                    fading_seed=mobility_fading_seed,
+                    snapshot_t_offset_s=t_offset,
                 )
             else:
                 yield self._generate_one_sample(
@@ -1486,6 +1516,8 @@ class InternalSimSource(DataSource):
                     lsp_override=lsp_override,
                     ue_pos_override=ue_pos_ov,
                     doppler_hz_override=doppler_ov,
+                    fading_seed=mobility_fading_seed,
+                    snapshot_t_offset_s=t_offset,
                 )
 
     # ------------------------------------------------------------------
