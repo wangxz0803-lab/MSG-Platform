@@ -22,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from ..contract import ChannelSample
+from ..contract import ChannelEstMode, ChannelSample
 from .base import DataSource, register_source
 
 try:
@@ -139,6 +139,21 @@ class QuadrigaRealSource(DataSource):
         self.seed = int(cfg.get("seed", 42))
         self.skip_generation = bool(cfg.get("skip_generation", False))
 
+        # -- Link direction & estimation mode (F-001: was previously ignored) --
+        raw_link = str(cfg.get("link", "UL")).upper()
+        if raw_link == "BOTH":
+            self.link = "BOTH"
+        elif raw_link == "DL":
+            self.link = "DL"
+        else:
+            self.link = "UL"
+        raw_est = str(cfg.get("channel_est_mode", "ls_linear")).lower()
+        self.channel_est_mode: str = raw_est if raw_est in ("ideal", "ls_linear", "ls_mmse") else "ls_linear"
+        self.pilot_type_ul: str = str(cfg.get("pilot_type_ul", cfg.get("pilot_type", "srs_zc")))
+        self.pilot_type_dl: str = str(cfg.get("pilot_type_dl", cfg.get("pilot_type", "csi_rs_gold")))
+        self.tdd_pattern: str = str(cfg.get("tdd_pattern", "DDDSU"))
+        self.num_interfering_ues: int = int(cfg.get("num_interfering_ues", 3))
+
         _project_root = Path(__file__).resolve().parents[4]
         repo = Path(cfg.get("repo_root", os.environ.get("MSG_REPO_ROOT", str(_project_root))))
         _local_matlab = _project_root / "matlab"
@@ -250,18 +265,20 @@ class QuadrigaRealSource(DataSource):
                 if yielded >= self.num_samples:
                     return
 
-                h_ideal = np.transpose(Hf_ideal[i_ue], (3, 2, 0, 1))
-                h_est = np.transpose(Hf_est[i_ue], (3, 2, 0, 1))
+                # MATLAB outputs UL channels: [BsAnt, ue_ant, N_RB, no_ss]
+                # Transpose to platform shape: [T, RB, BS_ant, UE_ant]
+                h_ul_ideal = np.transpose(Hf_ideal[i_ue], (3, 2, 0, 1))
+                h_ul_est = np.transpose(Hf_est[i_ue], (3, 2, 0, 1))
 
                 snr_dB = float(np.nan_to_num(np.clip(mat_snr[i_ue], -50, 50), nan=50.0))
                 sir_dB = float(np.nan_to_num(np.clip(mat_sir[i_ue], -50, 50), nan=50.0))
                 sinr_dB = float(np.nan_to_num(np.clip(mat_sinr[i_ue], -50, 50), nan=50.0))
 
-                raw_gain = np.mean(np.abs(h_ideal) ** 2)
+                raw_gain = np.mean(np.abs(h_ul_ideal) ** 2)
                 if raw_gain > 0:
                     scale = np.sqrt(raw_gain)
-                    h_ideal = h_ideal / scale
-                    h_est = h_est / scale
+                    h_ul_ideal = h_ul_ideal / scale
+                    h_ul_est = h_ul_est / scale
 
                 try:
                     ue_p = np.asarray(ue_pos_all)[:, i_ue].flatten()
@@ -273,33 +290,99 @@ class QuadrigaRealSource(DataSource):
                     float(ptx_per_re + 10 * np.log10(max(float(g), 1e-30))) for g in rsrp_row
                 ]
 
-                yield ChannelSample(
-                    h_serving_true=h_ideal.astype(np.complex64),
-                    h_serving_est=h_est.astype(np.complex64),
-                    h_interferers=None,
-                    noise_power_dBm=noise_dBm,
-                    snr_dB=snr_dB,
-                    sir_dB=sir_dB,
-                    sinr_dB=sinr_dB,
-                    ssb_rsrp_dBm=ssb_rsrp_list,
-                    link="UL",
-                    channel_est_mode="ls_linear",
-                    serving_cell_id=0,
-                    ue_position=ue_p,
-                    source="quadriga_real",
-                    sample_id=str(uuid.uuid4()),
-                    created_at=datetime.now(timezone.utc),
-                    meta={
-                        "num_cells": K,
-                        "isd_m": self.isd_m,
-                        "scenario": self.scenario,
-                        "carrier_freq_hz": self.carrier_freq_hz,
-                        "ue_speed_kmh": self._matlab_config.get("ue_speed_kmh", 0),
-                        "mobility_mode": self._matlab_config.get("mobility_mode", "linear"),
-                        "shard": shard_num,
-                        "ue_idx": i_ue,
-                    },
-                )
+                sample_meta = {
+                    "num_cells": K,
+                    "isd_m": self.isd_m,
+                    "scenario": self.scenario,
+                    "carrier_freq_hz": self.carrier_freq_hz,
+                    "ue_speed_kmh": self._matlab_config.get("ue_speed_kmh", 0),
+                    "mobility_mode": self._matlab_config.get("mobility_mode", "linear"),
+                    "shard": shard_num,
+                    "ue_idx": i_ue,
+                }
+
+                # -- Respect channel_est_mode: ideal means no estimation error --
+                if self.channel_est_mode == "ideal":
+                    h_ul_est = h_ul_ideal.copy()
+
+                # -- Direction handling via TDD reciprocity --
+                # MATLAB only produces UL (SRS) channels. For DL/BOTH we derive
+                # via H_DL = conj(H_UL^T), consistent with internal_sim/sionna_rt.
+                est_mode_out: ChannelEstMode = "ls_linear"
+                if self.channel_est_mode in ("ideal", "ls_linear", "ls_mmse"):
+                    est_mode_out = self.channel_est_mode  # type: ignore[assignment]
+
+                if self.link == "BOTH":
+                    # Paired mode: DL in h_serving + paired UL/DL fields
+                    h_dl_ideal = np.conj(h_ul_ideal.transpose(0, 1, 3, 2))
+                    h_dl_est = np.conj(h_ul_est.transpose(0, 1, 3, 2))
+                    yield ChannelSample(
+                        h_serving_true=h_dl_ideal.astype(np.complex64),
+                        h_serving_est=h_dl_est.astype(np.complex64),
+                        h_interferers=None,
+                        noise_power_dBm=noise_dBm,
+                        snr_dB=snr_dB,
+                        sir_dB=sir_dB,
+                        sinr_dB=sinr_dB,
+                        ssb_rsrp_dBm=ssb_rsrp_list,
+                        link="DL",
+                        channel_est_mode=est_mode_out,
+                        serving_cell_id=0,
+                        ue_position=ue_p,
+                        tdd_pattern=self.tdd_pattern,
+                        link_pairing="paired",
+                        h_ul_true=h_ul_ideal.astype(np.complex64),
+                        h_ul_est=h_ul_est.astype(np.complex64),
+                        h_dl_true=h_dl_ideal.astype(np.complex64),
+                        h_dl_est=h_dl_est.astype(np.complex64),
+                        source="quadriga_real",
+                        sample_id=str(uuid.uuid4()),
+                        created_at=datetime.now(timezone.utc),
+                        meta=sample_meta,
+                    )
+                elif self.link == "DL":
+                    # TDD reciprocity: H_DL = conj(H_UL^T)
+                    h_dl_ideal = np.conj(h_ul_ideal.transpose(0, 1, 3, 2))
+                    h_dl_est = np.conj(h_ul_est.transpose(0, 1, 3, 2))
+                    yield ChannelSample(
+                        h_serving_true=h_dl_ideal.astype(np.complex64),
+                        h_serving_est=h_dl_est.astype(np.complex64),
+                        h_interferers=None,
+                        noise_power_dBm=noise_dBm,
+                        snr_dB=snr_dB,
+                        sir_dB=sir_dB,
+                        sinr_dB=sinr_dB,
+                        ssb_rsrp_dBm=ssb_rsrp_list,
+                        link="DL",
+                        channel_est_mode=est_mode_out,
+                        serving_cell_id=0,
+                        ue_position=ue_p,
+                        tdd_pattern=self.tdd_pattern,
+                        source="quadriga_real",
+                        sample_id=str(uuid.uuid4()),
+                        created_at=datetime.now(timezone.utc),
+                        meta=sample_meta,
+                    )
+                else:
+                    yield ChannelSample(
+                        h_serving_true=h_ul_ideal.astype(np.complex64),
+                        h_serving_est=h_ul_est.astype(np.complex64),
+                        h_interferers=None,
+                        noise_power_dBm=noise_dBm,
+                        snr_dB=snr_dB,
+                        sir_dB=sir_dB,
+                        sinr_dB=sinr_dB,
+                        ssb_rsrp_dBm=ssb_rsrp_list,
+                        link="UL",
+                        channel_est_mode=est_mode_out,
+                        serving_cell_id=0,
+                        ue_position=ue_p,
+                        tdd_pattern=self.tdd_pattern,
+                        source="quadriga_real",
+                        sample_id=str(uuid.uuid4()),
+                        created_at=datetime.now(timezone.utc),
+                        meta=sample_meta,
+                    )
                 yielded += 1
 
             del Hf_est, Hf_ideal, d
@@ -334,6 +417,12 @@ class QuadrigaRealSource(DataSource):
             "scenario": self.scenario,
             "num_cells": self.num_cells,
             "carrier_freq_hz": self.carrier_freq_hz,
+            "link": self.link,
+            "channel_est_mode": self.channel_est_mode,
+            "pilot_type_ul": self.pilot_type_ul,
+            "pilot_type_dl": self.pilot_type_dl,
+            "tdd_pattern": self.tdd_pattern,
+            "num_interfering_ues": self.num_interfering_ues,
         }
 
 
