@@ -1391,8 +1391,19 @@ class InternalSimSource(DataSource):
         # -- Mobility: generate trajectory if mode is not static ---------------
         trajectory_positions: np.ndarray | None = None
         trajectory_dopplers: np.ndarray | None = None
+        static_pos: np.ndarray | None = None
 
-        if self.mobility_mode != "static" and self.ue_speed_kmh > 0:
+        if self.mobility_mode == "static" or self.ue_speed_kmh <= 0:
+            static_rng = np.random.default_rng(self._seed + 8888)
+            if self.custom_ue_positions:
+                p = self.custom_ue_positions[0]
+                static_pos = np.array(
+                    [float(p.get("x", 0)), float(p.get("y", 0)), float(p.get("z", self.ue_height_m))],
+                    dtype=np.float64,
+                )
+            else:
+                static_pos = self._place_ues(static_rng, sites, 1)[0]
+        elif self.mobility_mode != "static" and self.ue_speed_kmh > 0:
             from ._mobility import compute_doppler_from_trajectory, generate_trajectory
 
             traj_rng = np.random.default_rng(self._seed + 9999)
@@ -1449,7 +1460,9 @@ class InternalSimSource(DataSource):
 
             ue_pos_ov: np.ndarray | None = None
             doppler_ov: float | None = None
-            if trajectory_positions is not None:
+            if static_pos is not None:
+                ue_pos_ov = static_pos
+            elif trajectory_positions is not None:
                 ue_pos_ov = trajectory_positions[idx]
             if trajectory_dopplers is not None:
                 doppler_ov = float(np.abs(trajectory_dopplers[idx]))
