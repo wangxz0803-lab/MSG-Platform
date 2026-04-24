@@ -1253,6 +1253,10 @@ class SionnaRTSource(DataSource):
                         rician_k_linear=_ric,
                         tdl_profile=self._tdl_profile,
                     )
+                    _h_tdl_pw = float(np.mean(np.abs(_h_tdl) ** 2))
+                    _serv_pw = float(np.mean(np.abs(h_all[_s_idx]) ** 2))
+                    if _h_tdl_pw > 1e-30 and _serv_pw > 1e-30:
+                        _h_tdl = _h_tdl * np.sqrt(_serv_pw / _h_tdl_pw)
                     h_all[_k] = (_h_tdl * _rel_amp).astype(np.complex64)
                     rx_power_dbm[_k] = _exp_rx
 
