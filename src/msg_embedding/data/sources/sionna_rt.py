@@ -1064,6 +1064,7 @@ class SionnaRTSource(DataSource):
         paired: bool = False,
         ue_pos_override: np.ndarray | None = None,
         doppler_hz_override: float | None = None,
+        last_rt_channels: tuple[list[np.ndarray], np.ndarray, float] | None = None,
     ) -> ChannelSample:
         """Generate one physically meaningful ChannelSample.
 
@@ -1139,6 +1140,11 @@ class SionnaRTSource(DataSource):
                     max_power = max(float(np.mean(np.abs(h) ** 2)) for h in h_all)
                     if max_power > 1e-20:
                         ue_pos = rt_ue_pos
+                        self._last_rt_channels = (
+                            [h.copy() for h in h_all],
+                            rx_power_dbm.copy(),
+                            noise_power_dbm,
+                        )
                         break
                     if _rt_attempt < _MAX_RT_RETRIES - 1:
                         logger.info(
@@ -1161,43 +1167,42 @@ class SionnaRTSource(DataSource):
                                 self.ue_height_m,
                             )[0]
                     else:
-                        logger.warning(
-                            "RT: all %d attempts produced zero channels for sample %d, "
-                            "falling back to TDL.",
-                            _MAX_RT_RETRIES,
-                            idx,
-                        )
-                        ue_pos = ue_pos_canonical
-                        h_all, rx_power_dbm, noise_power_dbm = self._compute_channels_tdl(
-                            rng,
-                            sites,
-                            ue_pos,
-                            T,
-                            RB,
-                            BS_ant,
-                            UE_ant,
-                        )
-                        sionna_rt_used = False
+                        if last_rt_channels is not None:
+                            logger.info(
+                                "RT: all %d attempts produced zero channels for sample %d, "
+                                "reusing previous RT channels to preserve temporal consistency.",
+                                _MAX_RT_RETRIES, idx,
+                            )
+                            h_all, rx_power_dbm, noise_power_dbm = last_rt_channels
+                            sionna_rt_used = True
+                        else:
+                            logger.warning(
+                                "RT: all %d attempts produced zero channels for sample %d, "
+                                "falling back to TDL.",
+                                _MAX_RT_RETRIES, idx,
+                            )
+                            ue_pos = ue_pos_canonical
+                            h_all, rx_power_dbm, noise_power_dbm = self._compute_channels_tdl(
+                                rng, sites, ue_pos, T, RB, BS_ant, UE_ant,
+                            )
+                            sionna_rt_used = False
                 except Exception as exc:
                     logger.warning(
                         "Sionna RT failed for sample %d attempt %d (%s)",
-                        idx,
-                        _rt_attempt,
-                        exc,
+                        idx, _rt_attempt, exc,
                     )
                     if _rt_attempt == _MAX_RT_RETRIES - 1:
-                        logger.warning("All RT attempts failed, falling back to TDL.")
-                        ue_pos = ue_pos_canonical
-                        h_all, rx_power_dbm, noise_power_dbm = self._compute_channels_tdl(
-                            rng,
-                            sites,
-                            ue_pos,
-                            T,
-                            RB,
-                            BS_ant,
-                            UE_ant,
-                        )
-                        sionna_rt_used = False
+                        if last_rt_channels is not None:
+                            logger.info("All RT attempts failed for sample %d, reusing previous RT channels.", idx)
+                            h_all, rx_power_dbm, noise_power_dbm = last_rt_channels
+                            sionna_rt_used = True
+                        else:
+                            logger.warning("All RT attempts failed, falling back to TDL.")
+                            ue_pos = ue_pos_canonical
+                            h_all, rx_power_dbm, noise_power_dbm = self._compute_channels_tdl(
+                                rng, sites, ue_pos, T, RB, BS_ant, UE_ant,
+                            )
+                            sionna_rt_used = False
                     break
         else:
             h_all, rx_power_dbm, noise_power_dbm = self._compute_channels_tdl(
@@ -1548,6 +1553,8 @@ class SionnaRTSource(DataSource):
                 dt_s=self.sample_interval_s,
             )
 
+        self._last_rt_channels: tuple[list[np.ndarray], np.ndarray, float] | None = None
+
         for idx in range(self.num_samples):
             ue_pos_ov: np.ndarray | None = None
             doppler_ov: float | None = None
@@ -1565,6 +1572,7 @@ class SionnaRTSource(DataSource):
                     paired=True,
                     ue_pos_override=ue_pos_ov,
                     doppler_hz_override=doppler_ov,
+                    last_rt_channels=self._last_rt_channels,
                 )
             else:
                 yield self._generate_one_sample(
@@ -1572,6 +1580,7 @@ class SionnaRTSource(DataSource):
                     sites,
                     ue_pos_override=ue_pos_ov,
                     doppler_hz_override=doppler_ov,
+                    last_rt_channels=self._last_rt_channels,
                 )
 
     def describe(self) -> dict[str, Any]:
