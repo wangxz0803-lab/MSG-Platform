@@ -33,6 +33,9 @@ __all__ = [
     "srs_sequence",
     "srs_group_number",
     "srs_freq_position",
+    "srs_rb_indices",
+    "srs_hopping_cycle_length",
+    "srs_accumulated_rb_indices",
 ]
 
 
@@ -360,3 +363,107 @@ def srs_freq_position(
             k_0 += cfg.K_TC * row.m_srs[b] * n_b_list[b]
 
         return n_b_list[B_SRS] if n_b_list else 0, k_0
+
+
+def srs_rb_indices(
+    cfg: SRSResourceConfig,
+    slot: int,
+    symbol: int,
+    total_rb: int,
+) -> np.ndarray:
+    """Return the RB indices covered by SRS in a given slot.
+
+    Uses the bandwidth tree (C_SRS / B_SRS) and frequency hopping logic
+    to determine which ``m_SRS[B_SRS]`` RBs carry SRS pilots.
+
+    Returns an int64 array of RB indices, clamped to ``[0, total_rb)``.
+    """
+    row = _get_bw_row(cfg.C_SRS)
+    m_srs_b = row.m_srs[cfg.B_SRS]
+
+    B_SRS = cfg.B_SRS
+    b_hop = cfg.b_hop
+
+    if not cfg.hopping_enabled:
+        n_b_list: list[int] = []
+        for b in range(B_SRS + 1):
+            N_b = row.n[b]
+            n_b_list.append(cfg.n_RRC % max(1, N_b))
+    else:
+        N_symb_slot = 14
+        if cfg.T_SRS > 0:
+            n_SRS = ((slot - cfg.T_offset) // cfg.T_SRS) * cfg.R + (symbol // N_symb_slot)
+        else:
+            n_SRS = 0
+
+        n_b_list = []
+        for b in range(B_SRS + 1):
+            N_b = row.n[b]
+            if N_b <= 1:
+                n_b_list.append(0)
+                continue
+            if b <= b_hop:
+                n_b_list.append(cfg.n_RRC % N_b)
+            else:
+                prod_N = 1
+                for bp in range(b_hop + 1, b):
+                    prod_N *= row.n[bp]
+                if b == b_hop + 1:
+                    F_b = (n_SRS // prod_N) % N_b
+                else:
+                    F_b_prev = 0
+                    for bp in range(b_hop + 1, b):
+                        pass
+                    F_b = ((n_SRS // prod_N) + F_b_prev) % N_b
+                n_b_list.append((F_b + cfg.n_RRC % N_b) % N_b)
+
+    rb_offset = 0
+    for b in range(1, B_SRS + 1):
+        rb_offset += n_b_list[b] * row.m_srs[b]
+
+    rb_start = cfg.n_RRC + rb_offset
+    rb_start = max(0, min(rb_start, total_rb - m_srs_b))
+    rb_end = min(rb_start + m_srs_b, total_rb)
+    return np.arange(rb_start, rb_end, dtype=np.int64)
+
+
+def srs_hopping_cycle_length(cfg: SRSResourceConfig) -> int:
+    """Number of SRS occasions needed to sweep all hopping positions once.
+
+    Per 38.211 §6.4.1.4.3, the cycle equals the product of N[b] for
+    b = b_hop+1 .. B_SRS.  Returns 1 when hopping is disabled.
+    """
+    if not cfg.hopping_enabled:
+        return 1
+    row = _get_bw_row(cfg.C_SRS)
+    cycle = 1
+    for b in range(cfg.b_hop + 1, cfg.B_SRS + 1):
+        cycle *= row.n[b]
+    return max(cycle, 1)
+
+
+def srs_accumulated_rb_indices(
+    cfg: SRSResourceConfig,
+    current_slot: int,
+    symbol: int,
+    total_rb: int,
+) -> np.ndarray:
+    """Return all RBs covered by one complete hopping cycle ending at *current_slot*.
+
+    The base station accumulates SRS observations across ``cycle_length``
+    consecutive SRS occasions (spaced by ``T_SRS`` slots each).  After a
+    full cycle the union of observed RBs covers ``m_SRS[0]`` RBs — the
+    top-level bandwidth — with no interpolation gaps inside.
+
+    When hopping is disabled the result is identical to :func:`srs_rb_indices`.
+    """
+    cycle = srs_hopping_cycle_length(cfg)
+    if cycle <= 1:
+        return srs_rb_indices(cfg, current_slot, symbol, total_rb)
+
+    all_rbs: set[int] = set()
+    for i in range(cycle):
+        hop_slot = current_slot - (cycle - 1 - i) * cfg.T_SRS
+        rbs = srs_rb_indices(cfg, hop_slot, symbol, total_rb)
+        all_rbs.update(rbs.tolist())
+    return np.sort(np.array(list(all_rbs), dtype=np.int64))

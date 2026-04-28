@@ -223,6 +223,16 @@ class ChannelSample(BaseModel):
         description="Per-cell SS-SINR under ideal conditions.",
     )
 
+    # --- DL precoding (SRS-based beamforming) ----------------------------
+    w_dl: NdArray | None = Field(
+        default=None,
+        description="[RB, BS_ant, rank] complex64 DL precoding weight matrix.",
+    )
+    dl_rank: int | None = Field(
+        default=None,
+        description="DL transmission rank (1-4), determined by SVD of UL channel.",
+    )
+
     # --- Provenance ------------------------------------------------------
     source: SourceType
     sample_id: str = Field(..., description="UUID4 string primary key.")
@@ -240,6 +250,7 @@ class ChannelSample(BaseModel):
         "h_ul_est",
         "h_dl_true",
         "h_dl_est",
+        "w_dl",
         mode="before",
     )
     @classmethod
@@ -402,6 +413,10 @@ class ChannelSample(BaseModel):
             "num_interfering_ues": self.num_interfering_ues,
             "ssb_rsrp_true_dBm": self.ssb_rsrp_true_dBm,
             "ssb_sinr_true_dB": self.ssb_sinr_true_dB,
+            "w_dl": (
+                _complex_to_pair(self.w_dl) if self.w_dl is not None else None
+            ),
+            "dl_rank": self.dl_rank,
             "noise_power_dBm": float(self.noise_power_dBm),
             "snr_dB": float(self.snr_dB),
             "sir_dB": None if self.sir_dB is None else float(self.sir_dB),
@@ -458,6 +473,8 @@ class ChannelSample(BaseModel):
             num_interfering_ues=d.get("num_interfering_ues"),
             ssb_rsrp_true_dBm=d.get("ssb_rsrp_true_dBm"),
             ssb_sinr_true_dB=d.get("ssb_sinr_true_dB"),
+            w_dl=_maybe_complex("w_dl"),
+            dl_rank=d.get("dl_rank"),
             noise_power_dBm=d["noise_power_dBm"],
             snr_dB=d["snr_dB"],
             sir_dB=d.get("sir_dB"),
@@ -508,6 +525,7 @@ class ChannelSample(BaseModel):
             "ul_sir_dB": self.ul_sir_dB,
             "dl_sir_dB": self.dl_sir_dB,
             "num_interfering_ues": self.num_interfering_ues,
+            "dl_rank": self.dl_rank,
             "channel_model": self.channel_model,
             "tdd_pattern": self.tdd_pattern,
             "ue_x": None if self.ue_position is None else float(self.ue_position[0]),

@@ -524,8 +524,7 @@ def _build_feat_dict(
     if h_ul_override is not None:
         h_ul = h_ul_override
     elif sample.link_pairing == "paired" and sample.h_ul_est is not None:
-        # h_ul_est stored as [T, RB, UE, BS]; transpose to [T, RB, BS, UE]
-        h_ul = sample.h_ul_est.transpose(0, 1, 3, 2)
+        h_ul = sample.h_ul_est
     else:
         h_ul = sample.h_serving_est
 
@@ -660,13 +659,33 @@ def _build_feat_dict(
 
     # =====================================================================
     # Gate: cqi  [1] int64 — Channel Quality Index 0-15
+    # When precoding weights are available, compute effective per-layer
+    # SINR from the precoded channel for a more accurate CQI.
     # =====================================================================
-    cqi = _cqi_from_sinr(sample.sinr_dB)
+    _w_dl = sample.w_dl if sample.w_dl is not None else (sample.meta.get("w_dl") if sample.meta else None)
+    if _w_dl is not None and isinstance(_w_dl, np.ndarray) and _w_dl.ndim == 3:
+        from msg_embedding.phy_sim.precoding import apply_precoding
+        try:
+            h_eff = apply_precoding(h_dl, _w_dl)  # [T, RB, rank, UE_ant]
+            eff_power = float(np.mean(np.abs(h_eff) ** 2))
+            noise_lin = 10.0 ** (-float(sample.snr_dB) / 10.0)
+            eff_sinr_lin = eff_power / max(noise_lin, 1e-30)
+            if sample.sir_dB is not None:
+                intf_lin = 10.0 ** (-float(sample.sir_dB) / 10.0)
+                eff_sinr_lin = eff_power / max(noise_lin + intf_lin, 1e-30)
+            eff_sinr_db = float(10.0 * np.log10(max(eff_sinr_lin, 1e-15)))
+            eff_sinr_db = float(np.clip(eff_sinr_db, -50.0, 50.0))
+            cqi = _cqi_from_sinr(eff_sinr_db)
+        except Exception:
+            cqi = _cqi_from_sinr(sample.sinr_dB)
+    else:
+        cqi = _cqi_from_sinr(sample.sinr_dB)
     feat["cqi"] = torch.tensor([int(cqi)], dtype=torch.int64)
 
     # =====================================================================
     # Context / metadata
     # =====================================================================
+    _dl_rank = sample.dl_rank if sample.dl_rank is not None else (sample.meta.get("dl_rank") if sample.meta else None)
     context: dict[str, Any] = {
         "bs_native": int(bs),
         "ue_native": int(ue),
@@ -675,6 +694,7 @@ def _build_feat_dict(
         "used_legacy_pmi": use_legacy_pmi,
         "sample_id": sample.sample_id,
         "link_pairing": sample.link_pairing,
+        "dl_rank": int(_dl_rank) if _dl_rank is not None else None,
     }
 
     return feat, context
@@ -748,7 +768,7 @@ def sample_to_features(
         feat_gt, _ = _build_feat_dict(
             sample,
             use_legacy_pmi=use_legacy_pmi,
-            h_ul_override=sample.h_ul_true.transpose(0, 1, 3, 2),
+            h_ul_override=sample.h_ul_true,
             h_dl_override=sample.h_dl_true,
         )
         with torch.no_grad():

@@ -287,6 +287,30 @@ function main_multi(config_path)
     end
     fprintf('[main_multi] Channel estimation mode: %s\n', est_mode);
 
+    % Link direction: UL / DL / BOTH
+    if isfield(cfg, 'link')
+        link_mode = upper(cfg.link);
+    else
+        link_mode = 'UL';
+    end
+    run_ul = any(strcmp(link_mode, {'UL', 'BOTH'}));
+    run_dl = any(strcmp(link_mode, {'DL', 'BOTH'}));
+    fprintf('[main_multi] Link mode: %s (UL=%d, DL=%d)\n', link_mode, run_ul, run_dl);
+
+    % CSI-RS configuration for DL channel estimation
+    if run_dl
+        csirs_cfg = struct();
+        csirs_cfg.num_cells = K;
+        csirs_cfg.serving_cell_id = 1;
+        csirs_cfg.num_rb = N_RB;
+        csirs_cfg.no_ss = no_ss;
+        csirs_cfg.c_init = 1000;
+        csirs_cfg.tx_power_dBm = Ptx_BS_dBm;
+        Hf_dl_est = complex(zeros(no_ue, BsAnt, ue_ant, N_RB, no_ss, 'single'));
+        dl_sinr_dB = zeros(1, no_ue, 'single');
+        dl_sir_dB  = zeros(1, no_ue, 'single');
+    end
+
     t0 = tic;
 
     % ------------------------------------------------------------------
@@ -318,15 +342,28 @@ function main_multi(config_path)
         % Store ideal serving channel (ground truth for evaluation)
         Hf_serving_ideal(i_ue, :, :, :, :) = Hf_per_cell(sid, :, :, :, :);
 
-        % Run SRS pipeline: real inter-cell interference + per-port LS
-        [H_est, sinr_srs, sir_srs] = ul_srs_pipeline( ...
-            Hf_per_cell, sid, srs_cfg, noise_dBm, est_mode);
-        % H_est: [BsAnt, ue_ant, N_RB, no_ss]
-        Hf_serving_est(i_ue, :, :, :, :) = H_est;
+        % Run UL SRS pipeline (when link = UL or BOTH)
+        if run_ul
+            [H_est, sinr_srs, sir_srs] = ul_srs_pipeline( ...
+                Hf_per_cell, sid, srs_cfg, noise_dBm, est_mode);
+            Hf_serving_est(i_ue, :, :, :, :) = H_est;
+            sinr_dB(i_ue) = single(sinr_srs);
+            sir_dB(i_ue)  = single(sir_srs);
+        else
+            Hf_serving_est(i_ue, :, :, :, :) = Hf_serving_ideal(i_ue, :, :, :, :);
+            sinr_dB(i_ue) = single(0);
+            sir_dB(i_ue)  = single(0);
+        end
 
-        % SINR/SIR from actual SRS reception (real interference structure)
-        sinr_dB(i_ue) = single(sinr_srs);
-        sir_dB(i_ue)  = single(sir_srs);
+        % Run DL CSI-RS pipeline (when link = DL or BOTH)
+        if run_dl
+            csirs_cfg.serving_cell_id = sid;
+            [~, H_dl, sinr_dl, sir_dl] = dl_csirs_pipeline( ...
+                Hf_per_cell, sid, csirs_cfg, noise_dBm, est_mode);
+            Hf_dl_est(i_ue, :, :, :, :) = permute(H_dl, [3, 4, 2, 1]);
+            dl_sinr_dB(i_ue) = single(sinr_dl);
+            dl_sir_dB(i_ue)  = single(sir_dl);
+        end
 
         % Compute per-cell RSRP and DL SNR from channel gains
         serving_gain = 0;
@@ -380,6 +417,8 @@ function main_multi(config_path)
     meta.Ptx_UE_dBm = Ptx_UE_dBm;
     meta.noise_dBm = noise_dBm;
     meta.est_mode = est_mode;
+    meta.link = link_mode;
+    if isfield(cfg, 'tdd_pattern'); meta.tdd_pattern = cfg.tdd_pattern; end
 
     % ------------------------------------------------------------------
     % Save output
@@ -392,8 +431,12 @@ function main_multi(config_path)
     end
     fullFilePath = fullfile(cfg.output_dir, fileName);
 
-    save(fullFilePath, 'Hf_serving_est', 'Hf_serving_ideal', 'rsrp_per_cell', ...
-         'snr_dB', 'sir_dB', 'sinr_dB', 'meta', '-v7');
+    save_vars = {'Hf_serving_est', 'Hf_serving_ideal', 'rsrp_per_cell', ...
+                 'snr_dB', 'sir_dB', 'sinr_dB', 'meta'};
+    if run_dl
+        save_vars = [save_vars, {'Hf_dl_est', 'dl_sinr_dB', 'dl_sir_dB'}];
+    end
+    save(fullFilePath, save_vars{:}, '-v7');
 
     elapsed = toc(t0);
     fprintf('[main_multi] Saved: %s\n', fullFilePath);
@@ -429,6 +472,10 @@ function cfg = apply_defaults(cfg)
     if ~isfield(cfg, 'ue_ant_h');           cfg.ue_ant_h = 2; end
     if ~isfield(cfg, 'output_dir');         cfg.output_dir = 'htt_v2_3gppmmw'; end
     if ~isfield(cfg, 'seed');               cfg.seed = 12345; end
+    if ~isfield(cfg, 'link');               cfg.link = 'UL'; end
+    if ~isfield(cfg, 'est_mode');           cfg.est_mode = 'ls_linear'; end
+    if ~isfield(cfg, 'tdd_pattern');        cfg.tdd_pattern = 'DDDSU'; end
+    if ~isfield(cfg, 'num_interfering_ues'); cfg.num_interfering_ues = 3; end
 end
 
 

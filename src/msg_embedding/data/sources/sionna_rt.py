@@ -350,33 +350,32 @@ _UE_PLACERS = {
 # ---------------------------------------------------------------------------
 
 
-def _generate_pilots_srs(num_rb: int, cell_id: int) -> np.ndarray:
-    """Generate Zadoff-Chu SRS pilot symbols for UL.  Returns [num_rb] complex128."""
-    from msg_embedding.ref_signals.zc import zadoff_chu
+def _generate_pilots_srs(
+    num_rb: int,
+    cell_id: int,
+    slot: int = 0,
+    symbol: int = 0,
+    group_hopping: bool = False,
+    sequence_hopping: bool = False,
+    K_TC: int = 2,
+    srs_num_rb: int | None = None,
+) -> np.ndarray:
+    """Generate SRS pilot symbols per 3GPP TS 38.211 §6.4.1.4.
 
-    Nzc = num_rb
-    if Nzc < 2:
-        return np.ones(max(num_rb, 1), dtype=np.complex128)
+    Delegates to the canonical implementation in internal_sim.
+    """
+    from msg_embedding.data.sources.internal_sim import (
+        _generate_pilots_srs as _impl,
+    )
 
-    nzc_prime = Nzc
-    while nzc_prime >= 2:
-        if _is_prime_simple(nzc_prime):
-            break
-        nzc_prime -= 1
-    if nzc_prime < 2:
-        nzc_prime = 2
-
-    u = max(1, (cell_id * 7 + 1) % nzc_prime)
-    if u == 0:
-        u = 1
-
-    seq = zadoff_chu(u, nzc_prime)
-    if len(seq) < num_rb:
-        pad = np.ones(num_rb - len(seq), dtype=np.complex128)
-        seq = np.concatenate([seq, pad])
-    else:
-        seq = seq[:num_rb]
-    return seq
+    return _impl(
+        num_rb, cell_id,
+        slot=slot, symbol=symbol,
+        group_hopping=group_hopping,
+        sequence_hopping=sequence_hopping,
+        K_TC=K_TC,
+        srs_num_rb=srs_num_rb,
+    )
 
 
 def _generate_pilots_csirs(
@@ -490,14 +489,14 @@ class SionnaRTSource(DataSource):
         self.fft_size: int = int(_dict_get(cfg, "fft_size", 1024))
         self.num_ofdm_symbols: int = int(_dict_get(cfg, "num_ofdm_symbols", 14))
         self.subcarrier_spacing: float = float(_dict_get(cfg, "subcarrier_spacing", 30e3))
-        # Number of RBs
-        self._num_rb: int = int(
-            _dict_get(
-                cfg,
-                "num_rb",
-                max(1, self.fft_size // 12),
-            )
-        )
+        # Number of RBs: 3GPP TS 38.101 standard table lookup
+        from msg_embedding.phy_sim.nr_rb_table import nr_rb_lookup
+
+        _cfg_num_rb = _dict_get(cfg, "num_rb", None)
+        if _cfg_num_rb is not None:
+            self._num_rb: int = int(_cfg_num_rb)
+        else:
+            self._num_rb = nr_rb_lookup(self.bandwidth_hz, self.subcarrier_spacing)
 
         # -- Antenna arrays (split TX/RX; legacy kept for backward compat) ----
         _legacy_bs = int(_dict_get(cfg, "num_bs_ant", 4))
@@ -557,13 +556,14 @@ class SionnaRTSource(DataSource):
         )
 
         # -- Pilot / estimation / link ----------------------------------------
-        self.pilot_type: str = str(_dict_get(cfg, "pilot_type", "csi_rs_gold"))
-        if self.pilot_type not in {"srs_zc", "csi_rs_gold"}:
-            raise ValueError(
-                f"Unknown pilot_type {self.pilot_type!r}; expected " "'srs_zc' / 'csi_rs_gold'."
-            )
-        self.pilot_type_dl: str = str(_dict_get(cfg, "pilot_type_dl", "csi_rs_gold"))
-        self.pilot_type_ul: str = str(_dict_get(cfg, "pilot_type_ul", "srs_zc"))
+        _pilot_fallback = str(_dict_get(cfg, "pilot_type", "csi_rs_gold"))
+        self.pilot_type_dl: str = str(_dict_get(cfg, "pilot_type_dl", _pilot_fallback))
+        self.pilot_type_ul: str = str(_dict_get(cfg, "pilot_type_ul",
+                                                 _pilot_fallback if _pilot_fallback == "srs_zc" else "srs_zc"))
+        if self.pilot_type_dl not in {"srs_zc", "csi_rs_gold"}:
+            raise ValueError(f"Unknown pilot_type_dl {self.pilot_type_dl!r}; expected 'srs_zc' / 'csi_rs_gold'.")
+        if self.pilot_type_ul not in {"srs_zc", "csi_rs_gold"}:
+            raise ValueError(f"Unknown pilot_type_ul {self.pilot_type_ul!r}; expected 'srs_zc' / 'csi_rs_gold'.")
         self.channel_est_mode: str = str(_dict_get(cfg, "channel_est_mode", "ls_linear"))
         if self.channel_est_mode not in {"ideal", "ls_linear", "ls_mmse"}:
             raise ValueError(f"Unknown channel_est_mode {self.channel_est_mode!r}.")
@@ -622,7 +622,25 @@ class SionnaRTSource(DataSource):
         self.srs_group_hopping: bool = bool(_dict_get(cfg, "srs_group_hopping", False))
         self.srs_sequence_hopping: bool = bool(_dict_get(cfg, "srs_sequence_hopping", False))
         self.srs_periodicity: int = int(_dict_get(cfg, "srs_periodicity", 10))
-        self.srs_b_hop: int = int(_dict_get(cfg, "srs_b_hop", 3))
+        self.srs_b_hop: int = int(_dict_get(cfg, "srs_b_hop", 0))
+        self.srs_comb: int = int(_dict_get(cfg, "srs_comb", 2))
+        self.srs_c_srs: int = int(_dict_get(cfg, "srs_c_srs", 3))
+        self.srs_b_srs: int = int(_dict_get(cfg, "srs_b_srs", 1))
+        self.srs_n_rrc: int = int(_dict_get(cfg, "srs_n_rrc", 0))
+        from msg_embedding.ref_signals.srs import SRSResourceConfig
+
+        self._srs_resource_cfg = SRSResourceConfig(
+            C_SRS=self.srs_c_srs,
+            B_SRS=self.srs_b_srs,
+            K_TC=self.srs_comb,
+            n_RRC=self.srs_n_rrc,
+            b_hop=self.srs_b_hop,
+            n_SRS_ID=0,
+            T_SRS=self.srs_periodicity,
+            T_offset=0,
+            group_hopping=self.srs_group_hopping,
+            sequence_hopping=self.srs_sequence_hopping,
+        )
 
         # -- SSB measurement ---------------------------------------------------
         self.num_ssb_beams: int = int(_dict_get(cfg, "num_ssb_beams", 8))
@@ -1285,6 +1303,52 @@ class SionnaRTSource(DataSource):
         else:
             h_interferers = None
 
+        # --- UL interferers: independent per-UE channels H(UE_kn → BS_serving)
+        h_ul_intf_per_ue: list[np.ndarray] | None = None
+        if len(interferer_indices) > 0 and self.num_interfering_ues > 0:
+            cell_radius = self.isd_m / math.sqrt(3.0)
+            serving_bs_pos = np.asarray(sites[serving_idx].position, dtype=np.float64)
+            p_serving_linear = 10.0 ** (rx_power_dbm[serving_idx] / 10.0)
+            _wl = 3e8 / self.carrier_freq_hz
+            _dop = (self.ue_speed_kmh / 3.6) / _wl
+            _ric = 10.0 ** (self.rician_k_db / 10.0) if self.rician_k_db > -50 else 0.0
+            h_ul_intf_per_ue = []
+            for ki, k in enumerate(interferer_indices):
+                intf_bs_pos = np.asarray(sites[k].position, dtype=np.float64)
+                intf_ue_positions = _place_ues_uniform(
+                    rng, self.num_interfering_ues, cell_radius,
+                    self.ue_height_m, center=intf_bs_pos[:2],
+                )
+                ue_channels = []
+                for n in range(self.num_interfering_ues):
+                    ue_n_pos = intf_ue_positions[n]
+                    pl_db_n, _ = self._compute_pathloss(rng, serving_bs_pos, ue_n_pos)
+                    rx_pwr_n = self.tx_power_dbm - pl_db_n
+                    rel_amp_n = math.sqrt(
+                        max(10.0 ** (rx_pwr_n / 10.0) / (p_serving_linear + 1e-30), 1e-15)
+                    )
+                    ue_seed = (self._seed + idx + K + ki * self.num_interfering_ues + n)
+                    _tdl_rng = np.random.default_rng(ue_seed)
+                    h_ue_n = _generate_tdl_channel(
+                        rng=_tdl_rng,
+                        num_ofdm_sym=T,
+                        num_rb=RB,
+                        num_tx_ant=UE_ant,
+                        num_rx_ant=BS_ant,
+                        tau_rms_ns=self.tau_rms_ns,
+                        subcarrier_spacing_hz=self.subcarrier_spacing,
+                        doppler_hz=_dop,
+                        rician_k_linear=_ric,
+                        tdl_profile=self._tdl_profile,
+                    )
+                    if serving_power > 1e-30:
+                        h_ue_n = h_ue_n / np.sqrt(serving_power)
+                    h_ue_n = (h_ue_n * rel_amp_n).astype(np.complex64)
+                    ue_channels.append(h_ue_n)
+                h_ul_intf_per_ue.append(
+                    np.stack(ue_channels, axis=0)  # [N_ues, T, RB, UE_ant, BS_ant]
+                )
+
         # --- SNR / SIR / SINR ------------------------------------------------
         p_serving_dbm = float(rx_power_dbm[serving_idx])
         snr_db = p_serving_dbm - noise_power_dbm
@@ -1315,6 +1379,18 @@ class SionnaRTSource(DataSource):
         )
         n_intf_ues = self.num_interfering_ues
 
+        # SRS frequency-domain position — accumulate full hopping cycle
+        from msg_embedding.ref_signals.srs import srs_accumulated_rb_indices as _srs_rb_fn
+
+        tdd = self._tdd_pattern
+        slot_idx = idx % tdd.period_slots
+        symbol_map = tdd.symbol_map(slot_idx)
+        dl_symbol_mask = np.array([s == "D" for s in symbol_map], dtype=bool)
+        ul_symbol_mask = np.array([s == "U" for s in symbol_map], dtype=bool)
+        ul_syms_for_srs = [i for i, m in enumerate(symbol_map) if m == "U"]
+        _srs_sym = ul_syms_for_srs[-1] if ul_syms_for_srs else 0
+        srs_rb_idx = _srs_rb_fn(self._srs_resource_cfg, idx, _srs_sym, RB)
+
         h_ul_true_out: np.ndarray | None = None
         h_ul_est_out: np.ndarray | None = None
         h_dl_true_out: np.ndarray | None = None
@@ -1336,6 +1412,14 @@ class SionnaRTSource(DataSource):
                 tau_rms_ns=self.tau_rms_ns,
                 subcarrier_spacing=self.subcarrier_spacing,
                 num_interfering_ues=n_intf_ues,
+                srs_group_hopping=self.srs_group_hopping,
+                srs_sequence_hopping=self.srs_sequence_hopping,
+                srs_comb=self.srs_comb,
+                slot_idx=slot_idx,
+                dl_symbol_mask=dl_symbol_mask,
+                ul_symbol_mask=ul_symbol_mask,
+                srs_rb_indices=srs_rb_idx,
+                h_interferers_ul_per_ue=h_ul_intf_per_ue,
             )
             h_serving_est = paired_result["h_dl_est"]
             h_ul_true_out = paired_result["h_ul_true"]
@@ -1348,12 +1432,22 @@ class SionnaRTSource(DataSource):
             link_pairing = "paired"
             sample_link = "DL"
         else:
+            _srs_rb = None
             if effective_pilot == "srs_zc":
-                pilots = _generate_pilots_srs(RB, serving_pci)
+                _srs_rb = srs_rb_idx
+                pilots = _generate_pilots_srs(
+                    RB, serving_pci,
+                    slot=slot_idx, symbol=_srs_sym,
+                    group_hopping=self.srs_group_hopping,
+                    sequence_hopping=self.srs_sequence_hopping,
+                    K_TC=self.srs_comb,
+                    srs_num_rb=len(_srs_rb),
+                )
             else:
                 pilots = _generate_pilots_csirs(RB, serving_pci)
 
             direction: str = "UL" if sample_link == "UL" else "DL"
+            _sym_mask = ul_symbol_mask if direction == "UL" else dl_symbol_mask
             est_result = estimate_channel_with_interference(
                 h_serving_true=h_serving_true,
                 h_interferers=h_interferers,
@@ -1367,6 +1461,15 @@ class SionnaRTSource(DataSource):
                 subcarrier_spacing=self.subcarrier_spacing,
                 serving_cell_id=serving_pci,
                 num_interfering_ues=n_intf_ues,
+                valid_symbol_mask=_sym_mask,
+                srs_rb_indices=_srs_rb,
+                srs_slot=slot_idx,
+                srs_symbol=_srs_sym if direction == "UL" else 0,
+                srs_group_hopping=self.srs_group_hopping,
+                srs_sequence_hopping=self.srs_sequence_hopping,
+                srs_K_TC=self.srs_comb,
+                srs_num_rb=len(_srs_rb) if _srs_rb is not None else None,
+                h_interferers_ul_per_ue=h_ul_intf_per_ue if direction == "UL" else None,
             )
             h_serving_est = est_result.h_est
             if est_result.sir_dB is not None:
@@ -1374,6 +1477,25 @@ class SionnaRTSource(DataSource):
                 sinr_db = _clamp_db(
                     -10.0 * math.log10(10.0 ** (-snr_db / 10.0) + 10.0 ** (-sir_db / 10.0))
                 )
+
+        # -- DL precoding weights from UL estimate (SRS-based beamforming) ---
+        from msg_embedding.phy_sim.precoding import compute_dl_precoding
+
+        w_dl_out: np.ndarray | None = None
+        rank_out: int | None = None
+        _max_r = min(4, UE_ant, BS_ant)
+        if paired and h_ul_est_out is not None:
+            prec = compute_dl_precoding(h_ul_est_out, max_rank=_max_r)
+            w_dl_out = prec.w_dl
+            rank_out = prec.rank
+        elif sample_link == "UL" and h_serving_est is not None:
+            prec = compute_dl_precoding(h_serving_est, max_rank=_max_r)
+            w_dl_out = prec.w_dl
+            rank_out = prec.rank
+        elif sample_link == "DL" and h_serving_est is not None:
+            prec = compute_dl_precoding(np.conj(h_serving_est), max_rank=_max_r)
+            w_dl_out = prec.w_dl
+            rank_out = prec.rank
 
         # Legacy interference signal (observed at receiver)
         interference_signal: np.ndarray | None = None
@@ -1447,6 +1569,11 @@ class SionnaRTSource(DataSource):
             "srs_sequence_hopping": self.srs_sequence_hopping,
             "srs_periodicity": self.srs_periodicity,
             "srs_b_hop": self.srs_b_hop,
+            "srs_comb": self.srs_comb,
+            "srs_c_srs": self.srs_c_srs,
+            "srs_b_srs": self.srs_b_srs,
+            "srs_n_rrc": self.srs_n_rrc,
+            "srs_rb_indices": srs_rb_idx.tolist(),
             "num_ofdm_symbols": T,
             "num_rb": RB,
             "noise_figure_db": self.noise_figure_db,
@@ -1468,7 +1595,11 @@ class SionnaRTSource(DataSource):
             "seed": self._seed,
             "mock": False,
             "sionna_rt_used": sionna_rt_used,
+            "dl_rank": rank_out,
         }
+        if w_dl_out is not None:
+            meta["w_dl_shape"] = list(w_dl_out.shape)
+            meta["w_dl"] = w_dl_out
 
         return ChannelSample(
             h_serving_true=h_serving_true,
@@ -1500,6 +1631,8 @@ class SionnaRTSource(DataSource):
             num_interfering_ues=n_intf_ues_out,
             ssb_rsrp_true_dBm=ssb_rsrp_true,
             ssb_sinr_true_dB=ssb_sinr_true,
+            w_dl=w_dl_out,
+            dl_rank=rank_out,
             source="sionna_rt",
             sample_id=str(uuid.uuid4()),
             created_at=datetime.now(timezone.utc),
@@ -1598,7 +1731,8 @@ class SionnaRTSource(DataSource):
             "num_cells": self.num_cells,
             "num_ues": self.num_ues,
             "expected_sample_count": self.num_samples,
-            "pilot_type": self.pilot_type,
+            "pilot_type_dl": self.pilot_type_dl,
+            "pilot_type_ul": self.pilot_type_ul,
             "pilot_type_dl": self.pilot_type_dl,
             "pilot_type_ul": self.pilot_type_ul,
             "channel_est_mode": self.channel_est_mode,
@@ -1722,9 +1856,10 @@ class SionnaRTMockSource(DataSource):
         if self.link not in {"UL", "DL", "BOTH"}:
             raise ValueError(f"link must be 'UL', 'DL', or 'both', got {self.link!r}.")
         self.scenario: str = str(_dict_get(cfg, "scenario", "munich"))
-        self.pilot_type: str = str(_dict_get(cfg, "pilot_type", "csi_rs_gold"))
-        self.pilot_type_dl: str = str(_dict_get(cfg, "pilot_type_dl", "csi_rs_gold"))
-        self.pilot_type_ul: str = str(_dict_get(cfg, "pilot_type_ul", "srs_zc"))
+        _pf = str(_dict_get(cfg, "pilot_type", "csi_rs_gold"))
+        self.pilot_type_dl: str = str(_dict_get(cfg, "pilot_type_dl", _pf))
+        self.pilot_type_ul: str = str(_dict_get(cfg, "pilot_type_ul",
+                                                 _pf if _pf == "srs_zc" else "srs_zc"))
         self.num_ues: int = int(_dict_get(cfg, "num_ues", 1))
         self.snr_dB: float = float(_dict_get(cfg, "snr_dB", _DEFAULT_SNR_DB))
         self.sir_dB: float = float(_dict_get(cfg, "sir_dB", _DEFAULT_SIR_DB))
@@ -1743,7 +1878,25 @@ class SionnaRTMockSource(DataSource):
         self.srs_group_hopping: bool = bool(_dict_get(cfg, "srs_group_hopping", False))
         self.srs_sequence_hopping: bool = bool(_dict_get(cfg, "srs_sequence_hopping", False))
         self.srs_periodicity: int = int(_dict_get(cfg, "srs_periodicity", 10))
-        self.srs_b_hop: int = int(_dict_get(cfg, "srs_b_hop", 3))
+        self.srs_b_hop: int = int(_dict_get(cfg, "srs_b_hop", 0))
+        self.srs_comb: int = int(_dict_get(cfg, "srs_comb", 2))
+        self.srs_c_srs: int = int(_dict_get(cfg, "srs_c_srs", 3))
+        self.srs_b_srs: int = int(_dict_get(cfg, "srs_b_srs", 1))
+        self.srs_n_rrc: int = int(_dict_get(cfg, "srs_n_rrc", 0))
+        from msg_embedding.ref_signals.srs import SRSResourceConfig as _SRSResCfg
+
+        self._srs_resource_cfg = _SRSResCfg(
+            C_SRS=self.srs_c_srs,
+            B_SRS=self.srs_b_srs,
+            K_TC=self.srs_comb,
+            n_RRC=self.srs_n_rrc,
+            b_hop=self.srs_b_hop,
+            n_SRS_ID=0,
+            T_SRS=self.srs_periodicity,
+            T_offset=0,
+            group_hopping=self.srs_group_hopping,
+            sequence_hopping=self.srs_sequence_hopping,
+        )
         self.num_ssb_beams: int = int(_dict_get(cfg, "num_ssb_beams", 8))
         self.enable_ssb: bool = bool(_dict_get(cfg, "enable_ssb", True))
 
@@ -1826,6 +1979,10 @@ class SionnaRTMockSource(DataSource):
             "srs_sequence_hopping": self.srs_sequence_hopping,
             "srs_periodicity": self.srs_periodicity,
             "srs_b_hop": self.srs_b_hop,
+            "srs_comb": self.srs_comb,
+            "srs_c_srs": self.srs_c_srs,
+            "srs_b_srs": self.srs_b_srs,
+            "srs_n_rrc": self.srs_n_rrc,
             "custom_positions": self.custom_site_positions is not None,
             "sample_index": int(idx),
             "mock": True,
@@ -1855,6 +2012,8 @@ class SionnaRTMockSource(DataSource):
             ul_sir_dB=ul_sir_db_out,
             dl_sir_dB=dl_sir_db_out,
             num_interfering_ues=n_intf_ues_out,
+            w_dl=None,
+            dl_rank=None,
             source="sionna_rt",
             sample_id=str(uuid.uuid4()),
             created_at=datetime.now(timezone.utc),
@@ -1875,7 +2034,8 @@ class SionnaRTMockSource(DataSource):
             "scenario": self.scenario,
             "num_cells": self.num_cells,
             "expected_sample_count": self.num_samples,
-            "pilot_type": self.pilot_type,
+            "pilot_type_dl": self.pilot_type_dl,
+            "pilot_type_ul": self.pilot_type_ul,
             "pilot_type_dl": self.pilot_type_dl,
             "pilot_type_ul": self.pilot_type_ul,
             "channel_est_mode": self.channel_est_mode,

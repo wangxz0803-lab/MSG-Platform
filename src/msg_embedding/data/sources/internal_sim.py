@@ -418,39 +418,54 @@ def _generate_pilots_srs(
     num_rb: int,
     cell_id: int,
     slot: int = 0,
+    symbol: int = 0,
+    group_hopping: bool = False,
+    sequence_hopping: bool = False,
+    K_TC: int = 2,
+    srs_num_rb: int | None = None,
 ) -> np.ndarray:
-    """Generate Zadoff-Chu SRS pilot symbols for UL.
+    """Generate SRS pilot symbols per 3GPP TS 38.211 §6.4.1.4.
 
-    Returns shape ``[num_rb]`` complex128.
+    Uses the full NR SRS sequence with group/sequence hopping when enabled.
+
+    Parameters
+    ----------
+    num_rb : int
+        Total number of RBs in the carrier (used as fallback).
+    srs_num_rb : int or None
+        Number of RBs covered by SRS in this slot (from SRS bandwidth config).
+        When provided, the sequence length matches the SRS bandwidth, not full band.
+
+    Returns shape ``[effective_rb]`` complex128, where effective_rb = srs_num_rb or num_rb.
     """
-    from msg_embedding.ref_signals.zc import zadoff_chu
+    from msg_embedding.ref_signals.srs import srs_sequence
 
-    Nzc = num_rb
-    # Find the largest prime <= Nzc for the ZC length
-    if Nzc < 2:
-        return np.ones(max(num_rb, 1), dtype=np.complex128)
-
-    # Pick a prime Nzc
-    nzc_prime = Nzc
-    while nzc_prime >= 2:
-        if _is_prime_simple(nzc_prime):
-            break
-        nzc_prime -= 1
-    if nzc_prime < 2:
-        nzc_prime = 2
-
-    # Root index derived from cell_id (avoid 0)
-    u = max(1, (cell_id * 7 + 1) % nzc_prime)
-    if u == 0:
-        u = 1
-
-    seq = zadoff_chu(u, nzc_prime)
-    # Pad or truncate to num_rb
-    if len(seq) < num_rb:
-        pad = np.ones(num_rb - len(seq), dtype=np.complex128)
+    effective_rb = srs_num_rb if srs_num_rb is not None else num_rb
+    # Msc is the number of SRS subcarriers: m_SRS_b * 12 / K_TC.
+    # Minimum valid Msc for ZC/CG tables is 6.
+    Msc = max(effective_rb * 12 // K_TC, 6)
+    n_SRS_ID = cell_id % 1024
+    seq = srs_sequence(
+        n_SRS_ID=n_SRS_ID,
+        K_TC=K_TC,
+        n_cs=0,
+        N_ap=1,
+        Msc=Msc,
+        slot=slot,
+        symbol=symbol,
+        n_ap_index=0,
+        group_hopping=group_hopping,
+        sequence_hopping=sequence_hopping,
+    )
+    # Downsample from subcarrier level to one value per RB
+    sc_per_rb = 12 // K_TC
+    if sc_per_rb > 1 and len(seq) > effective_rb:
+        seq = seq[::sc_per_rb][:effective_rb]
+    if len(seq) < effective_rb:
+        pad = np.ones(effective_rb - len(seq), dtype=np.complex128)
         seq = np.concatenate([seq, pad])
     else:
-        seq = seq[:num_rb]
+        seq = seq[:effective_rb]
     return seq
 
 
@@ -560,14 +575,14 @@ class InternalSimSource(DataSource):
         self.bandwidth_hz: float = float(_dict_get(cfg, "bandwidth_hz", 100e6))
         self.subcarrier_spacing: float = float(_dict_get(cfg, "subcarrier_spacing", 30e3))
         self.num_ofdm_symbols: int = int(_dict_get(cfg, "num_ofdm_symbols", 14))
-        # Number of RBs: derived from bandwidth / (12 * SCS)
-        self._num_rb: int = int(
-            _dict_get(
-                cfg,
-                "num_rb",
-                max(1, int(self.bandwidth_hz / (12 * self.subcarrier_spacing))),
-            )
-        )
+        # Number of RBs: 3GPP TS 38.101 standard table lookup
+        from msg_embedding.phy_sim.nr_rb_table import nr_rb_lookup
+
+        _cfg_num_rb = _dict_get(cfg, "num_rb", None)
+        if _cfg_num_rb is not None:
+            self._num_rb: int = int(_cfg_num_rb)
+        else:
+            self._num_rb = nr_rb_lookup(self.bandwidth_hz, self.subcarrier_spacing)
 
         # -- Antenna arrays ---------------------------------------------------
         _legacy_bs = int(_dict_get(cfg, "num_bs_ant", 4))
@@ -599,13 +614,14 @@ class InternalSimSource(DataSource):
             )
 
         # -- Pilot / estimation / link ----------------------------------------
-        self.pilot_type: str = str(_dict_get(cfg, "pilot_type", "csi_rs_gold"))
-        if self.pilot_type not in {"srs_zc", "csi_rs_gold"}:
-            raise ValueError(
-                f"Unknown pilot_type {self.pilot_type!r}; expected " "'srs_zc' / 'csi_rs_gold'."
-            )
-        self.pilot_type_dl: str = str(_dict_get(cfg, "pilot_type_dl", "csi_rs_gold"))
-        self.pilot_type_ul: str = str(_dict_get(cfg, "pilot_type_ul", "srs_zc"))
+        _pilot_fallback = str(_dict_get(cfg, "pilot_type", "csi_rs_gold"))
+        self.pilot_type_dl: str = str(_dict_get(cfg, "pilot_type_dl", _pilot_fallback))
+        self.pilot_type_ul: str = str(_dict_get(cfg, "pilot_type_ul",
+                                                 _pilot_fallback if _pilot_fallback == "srs_zc" else "srs_zc"))
+        if self.pilot_type_dl not in {"srs_zc", "csi_rs_gold"}:
+            raise ValueError(f"Unknown pilot_type_dl {self.pilot_type_dl!r}; expected 'srs_zc' / 'csi_rs_gold'.")
+        if self.pilot_type_ul not in {"srs_zc", "csi_rs_gold"}:
+            raise ValueError(f"Unknown pilot_type_ul {self.pilot_type_ul!r}; expected 'srs_zc' / 'csi_rs_gold'.")
         self.channel_est_mode: str = str(_dict_get(cfg, "channel_est_mode", "ls_linear"))
         if self.channel_est_mode not in {"ideal", "ls_linear", "ls_mmse"}:
             raise ValueError(f"Unknown channel_est_mode {self.channel_est_mode!r}.")
@@ -684,8 +700,37 @@ class InternalSimSource(DataSource):
         # -- SRS frequency hopping --------------------------------------------
         self.srs_group_hopping: bool = bool(_dict_get(cfg, "srs_group_hopping", False))
         self.srs_sequence_hopping: bool = bool(_dict_get(cfg, "srs_sequence_hopping", False))
+        if self.srs_group_hopping and self.srs_sequence_hopping:
+            raise ValueError("srs_group_hopping and srs_sequence_hopping are mutually exclusive")
         self.srs_periodicity: int = int(_dict_get(cfg, "srs_periodicity", 10))
-        self.srs_b_hop: int = int(_dict_get(cfg, "srs_b_hop", 3))
+        from msg_embedding.ref_signals.srs import SRS_PERIODICITY_TABLE, SRSResourceConfig
+
+        if self.srs_periodicity not in SRS_PERIODICITY_TABLE:
+            raise ValueError(
+                f"srs_periodicity={self.srs_periodicity} not in "
+                f"3GPP TS 38.211 Table 6.4.1.4.4-1: {SRS_PERIODICITY_TABLE}"
+            )
+        self.srs_b_hop: int = int(_dict_get(cfg, "srs_b_hop", 0))
+        self.srs_comb: int = int(_dict_get(cfg, "srs_comb", 2))
+        if self.srs_comb not in (2, 4, 8):
+            raise ValueError(f"srs_comb (K_TC) must be in {{2, 4, 8}}, got {self.srs_comb}")
+
+        # SRS bandwidth configuration (38.211 Table 6.4.1.4.3-1)
+        self.srs_c_srs: int = int(_dict_get(cfg, "srs_c_srs", 3))
+        self.srs_b_srs: int = int(_dict_get(cfg, "srs_b_srs", 1))
+        self.srs_n_rrc: int = int(_dict_get(cfg, "srs_n_rrc", 0))
+        self._srs_resource_cfg = SRSResourceConfig(
+            C_SRS=self.srs_c_srs,
+            B_SRS=self.srs_b_srs,
+            K_TC=self.srs_comb,
+            n_RRC=self.srs_n_rrc,
+            b_hop=self.srs_b_hop,
+            n_SRS_ID=0,
+            T_SRS=self.srs_periodicity,
+            T_offset=0,
+            group_hopping=self.srs_group_hopping,
+            sequence_hopping=self.srs_sequence_hopping,
+        )
 
         # -- SSB measurement --------------------------------------------------
         self.num_ssb_beams: int = int(_dict_get(cfg, "num_ssb_beams", 8))
@@ -853,11 +898,16 @@ class InternalSimSource(DataSource):
         snr_db: float,
         rng: np.random.Generator,
         tau_rms_ns_override: float | None = None,
+        valid_symbol_mask: np.ndarray | None = None,
+        srs_rb_indices: np.ndarray | None = None,
     ) -> np.ndarray:
         """Run channel estimation on h_true using the given pilots.
 
         ``h_true``: [T, RB, BS_ant, UE_ant] complex64
         ``pilots``: [RB] complex128  (reference signal sequence)
+        ``valid_symbol_mask``: [T] bool — TDD-aware mask of symbols where
+            pilots can be placed (DL symbols for CSI-RS, UL for SRS).
+            If None, all symbols are valid.
         Returns: [T, RB, BS_ant, UE_ant] complex64
         """
         from msg_embedding.channel_est import estimate_channel
@@ -865,8 +915,6 @@ class InternalSimSource(DataSource):
         T, RB, BS, UE = h_true.shape
 
         if mode == "ideal":
-            # Use the pipeline's ideal mode: just return h_true
-            # We still go through the pipeline for consistency
             h_true_freq_time = h_true.transpose(1, 0, 2, 3).reshape(RB, T, BS * UE)
             est = estimate_channel(
                 Y_rs=np.zeros((RB * T, BS * UE), dtype=np.complex64),
@@ -879,15 +927,32 @@ class InternalSimSource(DataSource):
                 h_true=h_true_freq_time,
                 dtype="complex64",
             )
-            return est.reshape(RB, T, BS, UE).transpose(1, 0, 2, 3).astype(np.complex64)
+            h_est = est.reshape(RB, T, BS, UE).transpose(1, 0, 2, 3).astype(np.complex64)
+            if valid_symbol_mask is not None:
+                guard_mask = ~(valid_symbol_mask | np.roll(valid_symbol_mask, 0))
+                for t_idx in range(T):
+                    if not valid_symbol_mask[t_idx] and not np.any(valid_symbol_mask):
+                        h_est[t_idx] = 0.0
+            return h_est
 
-        # Pilot density matches NR DMRS: every RB in frequency (needed to
-        # satisfy Nyquist for typical delay spreads), every 4th OFDM symbol
-        # in time (adequate for low-to-medium Doppler).
-        pilot_rb_spacing = 1
+        # Pilot placement: SRS RBs if provided, else full band
+        if srs_rb_indices is not None and len(srs_rb_indices) > 0:
+            rs_freq = srs_rb_indices.astype(np.int64)
+        else:
+            pilot_rb_spacing = 1
+            rs_freq = np.arange(0, RB, pilot_rb_spacing, dtype=np.int64)
         pilot_sym_spacing = max(1, min(4, T))
-        rs_freq = np.arange(0, RB, pilot_rb_spacing, dtype=np.int64)
-        rs_time = np.arange(0, T, pilot_sym_spacing, dtype=np.int64)
+        candidate_times = np.arange(0, T, pilot_sym_spacing, dtype=np.int64)
+        if valid_symbol_mask is not None:
+            valid_times = np.where(valid_symbol_mask)[0].astype(np.int64)
+            if len(valid_times) > 0:
+                rs_time = np.intersect1d(candidate_times, valid_times)
+                if len(rs_time) == 0:
+                    rs_time = valid_times[::max(1, len(valid_times) // 4)]
+            else:
+                rs_time = candidate_times
+        else:
+            rs_time = candidate_times
 
         if len(rs_freq) == 0:
             rs_freq = np.array([0], dtype=np.int64)
@@ -903,7 +968,10 @@ class InternalSimSource(DataSource):
         h_at_pilots = h_at_pilots.transpose(1, 0, 2, 3)  # [n_freq, n_time, BS, UE]
 
         # Pilot symbols at the RS positions
-        pilot_seq = pilots[rs_freq]  # [n_freq]
+        if srs_rb_indices is not None and len(pilots) == n_freq:
+            pilot_seq = pilots  # already sized for SRS bandwidth
+        else:
+            pilot_seq = pilots[rs_freq]  # [n_freq]
         # Repeat to match the (freq-slow, time-fast) flattening order used
         # by _gather_rs_grid in the estimation pipeline: position i maps to
         # (f = i // n_time, t = i % n_time), so each freq pilot repeats
@@ -937,12 +1005,13 @@ class InternalSimSource(DataSource):
             h_true=h_true.transpose(1, 0, 2, 3).reshape(RB, T, BS * UE),
             pdp_prior={
                 "tau_rms": (tau_rms_ns_override or self.tau_rms_ns) * 1e-9,
-                "delta_f": 12 * self.subcarrier_spacing * pilot_rb_spacing,
+                "delta_f": 12 * self.subcarrier_spacing * 1,
             },
             snr_db=snr_db,
             dtype="complex64",
         )
-        return est.reshape(RB, T, BS, UE).transpose(1, 0, 2, 3).astype(np.complex64)
+        h_est = est.reshape(RB, T, BS, UE).transpose(1, 0, 2, 3).astype(np.complex64)
+        return h_est
 
     # ------------------------------------------------------------------
     # Single-sample generation
@@ -965,8 +1034,10 @@ class InternalSimSource(DataSource):
         rng = np.random.default_rng(self._seed + idx)
 
         effective_link = link_override or self.link
-        effective_pilot = pilot_override or self.pilot_type
         sample_link: str = effective_link if effective_link in ("UL", "DL") else "DL"
+        effective_pilot = pilot_override or (
+            self.pilot_type_ul if sample_link == "UL" else self.pilot_type_dl
+        )
 
         # Determine antenna dimensions based on link direction
         if sample_link == "DL":
@@ -981,6 +1052,26 @@ class InternalSimSource(DataSource):
         T = self.num_ofdm_symbols
         RB = self._num_rb
         K = len(sites)  # total number of cells (sites * sectors)
+
+        # -- TDD slot resolution per 3GPP TS 38.213 §11.1 ----------------------
+        tdd = self._tdd_pattern
+        slot_idx = idx % tdd.period_slots
+        slot_direction = tdd.slot_type(slot_idx)
+        symbol_map = tdd.symbol_map(slot_idx)
+        dl_symbol_mask = np.array([s == "D" for s in symbol_map], dtype=bool)
+        ul_symbol_mask = np.array([s == "U" for s in symbol_map], dtype=bool)
+        guard_symbol_mask = np.array([s == "G" for s in symbol_map], dtype=bool)
+
+        # SRS periodicity: check if this slot carries SRS
+        srs_active_in_slot = (slot_idx % self.srs_periodicity) == 0
+
+        # SRS frequency-domain position (bandwidth tree + hopping)
+        # Accumulate across a full hopping cycle so UL estimation covers m_SRS[0] RBs
+        from msg_embedding.ref_signals.srs import srs_accumulated_rb_indices
+
+        ul_syms_for_srs = [i for i, m in enumerate(symbol_map) if m == "U"]
+        _srs_sym = ul_syms_for_srs[-1] if ul_syms_for_srs else 0
+        srs_rb_idx = srs_accumulated_rb_indices(self._srs_resource_cfg, idx, _srs_sym, RB)
 
         # Doppler frequency: prefer trajectory-derived value, then config-based
         wavelength = 3e8 / self.carrier_freq_hz
@@ -1115,7 +1206,7 @@ class InternalSimSource(DataSource):
 
         h_serving_true = h_all[serving_idx]  # [T, RB, BS, UE] complex64
 
-        # -- Interferers -------------------------------------------------------
+        # -- Interferers (DL: H(BS_k → target UE), already in h_all) ----------
         interferer_indices = [k for k in range(K) if k != serving_idx]
         if len(interferer_indices) > 0:
             h_interferers = np.stack([h_all[k] for k in interferer_indices], axis=0).astype(
@@ -1123,6 +1214,51 @@ class InternalSimSource(DataSource):
             )  # [K-1, T, RB, BS, UE]
         else:
             h_interferers = None
+
+        # -- UL interferers: independent per-UE channels H(UE_kn → BS_serving) -
+        h_ul_intf_per_ue: list[np.ndarray] | None = None
+        if len(interferer_indices) > 0 and self.num_interfering_ues > 0:
+            cell_radius = self.isd_m / math.sqrt(3.0)
+            serving_bs_pos = np.asarray(sites[serving_idx].position, dtype=np.float64)
+            h_ul_intf_per_ue = []
+            for ki, k in enumerate(interferer_indices):
+                intf_bs_pos = np.asarray(sites[k].position, dtype=np.float64)
+                intf_ue_positions = _place_ues_uniform(
+                    rng, self.num_interfering_ues, cell_radius,
+                    self.ue_height_m, center=intf_bs_pos[:2],
+                )
+                ue_channels = []
+                for n in range(self.num_interfering_ues):
+                    ue_n_pos = intf_ue_positions[n]
+                    pl_db_n, _ = self._compute_pathloss(rng, serving_bs_pos, ue_n_pos)
+                    rx_pwr_n = self.tx_power_dbm - pl_db_n
+                    rel_amp_n = math.sqrt(
+                        max(10.0 ** (rx_pwr_n / 10.0) / (p_serving_linear + 1e-30), 1e-15)
+                    )
+                    ue_seed = (fading_seed + K + ki * self.num_interfering_ues + n) if fading_seed is not None else None
+                    h_ue_n = _generate_tdl_channel(
+                        rng=rng,
+                        num_taps=self.num_taps,
+                        num_ofdm_sym=T,
+                        num_rb=RB,
+                        num_tx_ant=UE_ant,
+                        num_rx_ant=BS_ant,
+                        tau_rms_ns=sample_tau_rms_ns,
+                        subcarrier_spacing_hz=self.subcarrier_spacing,
+                        doppler_hz=doppler_hz,
+                        rician_k_linear=effective_k_linear,
+                        tdl_profile=effective_tdl,
+                        los_aod_rad=los_aod,
+                        los_aoa_rad=los_aoa,
+                        spatial_corr_rho=spatial_rho,
+                        fading_seed=ue_seed,
+                        t_offset_s=snapshot_t_offset_s,
+                    )
+                    h_ue_n = (h_ue_n * rel_amp_n).astype(np.complex64)
+                    ue_channels.append(h_ue_n)
+                h_ul_intf_per_ue.append(
+                    np.stack(ue_channels, axis=0)  # [N_ues, T, RB, UE_ant, BS_ant]
+                )
 
         # -- SNR / SIR / SINR --------------------------------------------------
         # Serving signal power (dBm)
@@ -1179,6 +1315,14 @@ class InternalSimSource(DataSource):
                 tau_rms_ns=sample_tau_rms_ns,
                 subcarrier_spacing=self.subcarrier_spacing,
                 num_interfering_ues=n_intf_ues,
+                srs_group_hopping=self.srs_group_hopping,
+                srs_sequence_hopping=self.srs_sequence_hopping,
+                srs_comb=self.srs_comb,
+                slot_idx=slot_idx,
+                dl_symbol_mask=dl_symbol_mask,
+                ul_symbol_mask=ul_symbol_mask,
+                srs_rb_indices=srs_rb_idx,
+                h_interferers_ul_per_ue=h_ul_intf_per_ue,
             )
             h_serving_est = paired_result["h_dl_est"]
             h_ul_true_out = paired_result["h_ul_true"]
@@ -1191,12 +1335,29 @@ class InternalSimSource(DataSource):
             link_pairing = "paired"
             sample_link = "DL"
         else:
+            # Find the first valid pilot symbol for the current TDD direction
+            _srs_rb = None  # SRS RB indices for UL, None for DL (full band)
             if effective_pilot == "srs_zc":
-                pilots = _generate_pilots_srs(RB, serving_pci)
+                ul_syms = [i for i, m in enumerate(symbol_map) if m == "U"]
+                pilot_symbol = ul_syms[-1] if ul_syms else 0
+                _srs_rb = srs_rb_idx
+                pilots = _generate_pilots_srs(
+                    RB,
+                    serving_pci,
+                    slot=slot_idx,
+                    symbol=pilot_symbol,
+                    group_hopping=self.srs_group_hopping,
+                    sequence_hopping=self.srs_sequence_hopping,
+                    K_TC=self.srs_comb,
+                    srs_num_rb=len(_srs_rb),
+                )
             else:
-                pilots = _generate_pilots_csirs(RB, serving_pci)
+                dl_syms = [i for i, m in enumerate(symbol_map) if m == "D"]
+                pilot_symbol = dl_syms[0] if dl_syms else 0
+                pilots = _generate_pilots_csirs(RB, serving_pci, slot=slot_idx, symbol=pilot_symbol)
 
             direction: str = "UL" if sample_link == "UL" else "DL"
+            _sym_mask = ul_symbol_mask if direction == "UL" else dl_symbol_mask
             est_result = estimate_channel_with_interference(
                 h_serving_true=h_serving_true,
                 h_interferers=h_interferers,
@@ -1210,6 +1371,15 @@ class InternalSimSource(DataSource):
                 subcarrier_spacing=self.subcarrier_spacing,
                 serving_cell_id=serving_pci,
                 num_interfering_ues=n_intf_ues,
+                valid_symbol_mask=_sym_mask,
+                srs_rb_indices=_srs_rb,
+                srs_slot=slot_idx,
+                srs_symbol=pilot_symbol if direction == "UL" else 0,
+                srs_group_hopping=self.srs_group_hopping,
+                srs_sequence_hopping=self.srs_sequence_hopping,
+                srs_K_TC=self.srs_comb,
+                srs_num_rb=len(_srs_rb) if _srs_rb is not None else None,
+                h_interferers_ul_per_ue=h_ul_intf_per_ue if direction == "UL" else None,
             )
             h_serving_est = est_result.h_est
             if est_result.sir_dB is not None:
@@ -1217,6 +1387,26 @@ class InternalSimSource(DataSource):
                 sinr_db = _clamp_db(
                     -10.0 * math.log10(10.0 ** (-snr_db / 10.0) + 10.0 ** (-sir_db / 10.0))
                 )
+
+        # -- DL precoding weights from UL estimate (SRS-based beamforming) ---
+        from msg_embedding.phy_sim.precoding import compute_dl_precoding
+
+        w_dl_out: np.ndarray | None = None
+        rank_out: int | None = None
+        _max_r = min(4, UE_ant, BS_ant)
+        if paired and h_ul_est_out is not None:
+            prec = compute_dl_precoding(h_ul_est_out, max_rank=_max_r)
+            w_dl_out = prec.w_dl
+            rank_out = prec.rank
+        elif sample_link == "UL" and h_serving_est is not None:
+            prec = compute_dl_precoding(h_serving_est, max_rank=_max_r)
+            w_dl_out = prec.w_dl
+            rank_out = prec.rank
+        elif sample_link == "DL" and h_serving_est is not None:
+            # DL only: derive UL via reciprocity (conj in contract convention)
+            prec = compute_dl_precoding(np.conj(h_serving_est), max_rank=_max_r)
+            w_dl_out = prec.w_dl
+            rank_out = prec.rank
 
         # Legacy interference signal (observed at receiver)
         interference_signal: np.ndarray | None = None
@@ -1281,6 +1471,8 @@ class InternalSimSource(DataSource):
             "mobility_mode": self.mobility_mode,
             "ue_distribution": self.ue_distribution,
             "pilot_type": effective_pilot,
+            "pilot_type_dl": self.pilot_type_dl,
+            "pilot_type_ul": self.pilot_type_ul,
             "scenario": self.scenario,
             "channel_model": self.channel_model_name,
             "tdd_pattern": self.tdd_pattern_name,
@@ -1292,6 +1484,15 @@ class InternalSimSource(DataSource):
             "srs_sequence_hopping": self.srs_sequence_hopping,
             "srs_periodicity": self.srs_periodicity,
             "srs_b_hop": self.srs_b_hop,
+            "srs_comb": self.srs_comb,
+            "srs_c_srs": self.srs_c_srs,
+            "srs_b_srs": self.srs_b_srs,
+            "srs_n_rrc": self.srs_n_rrc,
+            "srs_rb_indices": srs_rb_idx.tolist(),
+            "tdd_slot_index": slot_idx,
+            "tdd_slot_direction": slot_direction,
+            "tdd_symbol_map": symbol_map,
+            "srs_active_in_slot": srs_active_in_slot,
             "num_ofdm_symbols": T,
             "num_rb": RB,
             "noise_figure_db": self.noise_figure_db,
@@ -1313,7 +1514,11 @@ class InternalSimSource(DataSource):
             "sample_index": int(idx),
             "seed": self._seed,
             "mock": False,
+            "dl_rank": rank_out,
         }
+        if w_dl_out is not None:
+            meta["w_dl_shape"] = list(w_dl_out.shape)
+            meta["w_dl"] = w_dl_out
 
         return ChannelSample(
             h_serving_true=h_serving_true,
@@ -1345,6 +1550,8 @@ class InternalSimSource(DataSource):
             num_interfering_ues=n_intf_ues_out,
             ssb_rsrp_true_dBm=ssb_rsrp_true,
             ssb_sinr_true_dB=ssb_sinr_true,
+            w_dl=w_dl_out,
+            dl_rank=rank_out,
             source="internal_sim",
             sample_id=str(uuid.uuid4()),
             created_at=datetime.now(timezone.utc),
@@ -1534,7 +1741,6 @@ class InternalSimSource(DataSource):
             "num_cells": K,
             "num_ues": self.num_ues,
             "expected_sample_count": self.num_samples * multiplier,
-            "pilot_type": self.pilot_type,
             "pilot_type_dl": self.pilot_type_dl,
             "pilot_type_ul": self.pilot_type_ul,
             "channel_est_mode": self.channel_est_mode,

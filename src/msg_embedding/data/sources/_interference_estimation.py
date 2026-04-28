@@ -47,36 +47,51 @@ def _generate_interferer_pilots_srs(
     num_rb: int,
     cell_id: int,
     ue_index: int,
+    *,
+    slot: int = 0,
+    symbol: int = 0,
+    group_hopping: bool = False,
+    sequence_hopping: bool = False,
+    K_TC: int = 2,
+    srs_num_rb: int | None = None,
 ) -> np.ndarray:
-    """Generate SRS pilots for an interfering UE.
+    """Generate SRS pilots for an interfering UE per 3GPP TS 38.211 §6.4.1.4.
 
-    Each UE uses a different ZC root index derived from (cell_id, ue_index)
-    to model realistic SRS code-domain separation.
-    Returns shape ``[num_rb]`` complex128.
+    Uses the standard SRS sequence with ``n_SRS_ID = cell_id`` and per-UE
+    cyclic shift ``n_cs = ue_index % 8`` to model intra-cell orthogonality
+    and inter-cell interference randomisation.
+    Returns shape ``[effective_rb]`` complex128.
     """
-    from msg_embedding.ref_signals.zc import zadoff_chu
+    from msg_embedding.ref_signals.srs import srs_sequence
 
-    Nzc = num_rb
-    if Nzc < 2:
+    effective_rb = srs_num_rb if srs_num_rb is not None else num_rb
+    if effective_rb < 1:
         return np.ones(max(num_rb, 1), dtype=np.complex128)
 
-    nzc_prime = Nzc
-    while nzc_prime >= 2:
-        if _is_prime(nzc_prime):
-            break
-        nzc_prime -= 1
-    if nzc_prime < 2:
-        nzc_prime = 2
+    Msc = max(effective_rb * 12 // K_TC, 6)
+    n_SRS_ID = cell_id % 1024
+    n_cs = ue_index % (K_TC * 4)  # cyclic shift range per K_TC
 
-    u = max(1, ((cell_id + ue_index + 1) * 7 + 3) % nzc_prime)
-    if u == 0:
-        u = 1
-
-    seq = zadoff_chu(u, nzc_prime)
-    if len(seq) < num_rb:
-        seq = np.concatenate([seq, np.ones(num_rb - len(seq), dtype=np.complex128)])
+    seq = srs_sequence(
+        n_SRS_ID=n_SRS_ID,
+        K_TC=K_TC,
+        n_cs=n_cs,
+        N_ap=1,
+        Msc=Msc,
+        slot=slot,
+        symbol=symbol,
+        n_ap_index=0,
+        group_hopping=group_hopping,
+        sequence_hopping=sequence_hopping,
+    )
+    sc_per_rb = 12 // K_TC
+    if sc_per_rb > 1 and len(seq) > effective_rb:
+        seq = seq[::sc_per_rb][:effective_rb]
+    if len(seq) < effective_rb:
+        pad = np.ones(effective_rb - len(seq), dtype=np.complex128)
+        seq = np.concatenate([seq, pad])
     else:
-        seq = seq[:num_rb]
+        seq = seq[:effective_rb]
     return seq
 
 
@@ -106,30 +121,43 @@ def _generate_interferer_pilots_csirs(
     return seq
 
 
-def _is_prime(n: int) -> bool:
-    if n < 2:
-        return False
-    if n < 4:
-        return True
-    if n % 2 == 0:
-        return False
-    r = int(math.isqrt(n))
-    return all(n % i != 0 for i in range(3, r + 1, 2))
-
 
 def _build_pilot_grid(
     h_true: np.ndarray,
     RB: int,
     T: int,
+    valid_symbol_mask: np.ndarray | None = None,
+    srs_rb_indices: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, int]:
-    """Compute pilot RS grid positions matching NR DMRS density.
+    """Compute pilot RS grid positions matching NR reference signal density.
+
+    If ``srs_rb_indices`` is provided, pilots are placed only on those RBs
+    (SRS frequency hopping). Otherwise, pilots cover the full band.
+
+    If ``valid_symbol_mask`` is provided (TDD-aware), pilots are only placed
+    on symbols where the mask is True.
 
     Returns (rs_freq, rs_time, n_freq, n_time).
     """
-    pilot_rb_spacing = 1
+    if srs_rb_indices is not None and len(srs_rb_indices) > 0:
+        rs_freq = srs_rb_indices.astype(np.int64)
+    else:
+        pilot_rb_spacing = 1
+        rs_freq = np.arange(0, RB, pilot_rb_spacing, dtype=np.int64)
+
     pilot_sym_spacing = max(1, min(4, T))
-    rs_freq = np.arange(0, RB, pilot_rb_spacing, dtype=np.int64)
-    rs_time = np.arange(0, T, pilot_sym_spacing, dtype=np.int64)
+    candidate_times = np.arange(0, T, pilot_sym_spacing, dtype=np.int64)
+
+    if valid_symbol_mask is not None:
+        valid_times = np.where(valid_symbol_mask)[0].astype(np.int64)
+        if len(valid_times) > 0:
+            rs_time = np.intersect1d(candidate_times, valid_times)
+            if len(rs_time) == 0:
+                rs_time = valid_times[::max(1, len(valid_times) // 4)]
+        else:
+            rs_time = candidate_times
+    else:
+        rs_time = candidate_times
 
     if len(rs_freq) == 0:
         rs_freq = np.array([0], dtype=np.int64)
@@ -153,6 +181,15 @@ def estimate_channel_with_interference(
     subcarrier_spacing: int | float = 30000,
     serving_cell_id: int = 0,
     num_interfering_ues: int = 3,
+    valid_symbol_mask: np.ndarray | None = None,
+    srs_rb_indices: np.ndarray | None = None,
+    srs_slot: int = 0,
+    srs_symbol: int = 0,
+    srs_group_hopping: bool = False,
+    srs_sequence_hopping: bool = False,
+    srs_K_TC: int = 2,
+    srs_num_rb: int | None = None,
+    h_interferers_ul_per_ue: list[np.ndarray] | None = None,
 ) -> InterferenceEstResult:
     """Estimate the serving channel with physically modelled interference.
 
@@ -216,16 +253,25 @@ def estimate_channel_with_interference(
             sir_dB=None,
         )
 
-    # -- Build pilot grid (NR DMRS density) --
-    rs_freq, rs_time, n_freq, n_time = _build_pilot_grid(h_serving_true, RB, T)
+    # -- Build pilot grid (NR RS density, TDD-aware, SRS freq-hopping) --
+    rs_freq, rs_time, n_freq, n_time = _build_pilot_grid(
+        h_serving_true, RB, T,
+        valid_symbol_mask=valid_symbol_mask,
+        srs_rb_indices=srs_rb_indices,
+    )
 
     # -- Extract serving channel at pilot positions --
     # h_serving_true: [T, RB, Ant_tx, Ant_rx]
     h_at_pilots = h_serving_true[np.ix_(rs_time, rs_freq)]  # [n_time, n_freq, Ant_tx, Ant_rx]
     h_at_pilots = h_at_pilots.transpose(1, 0, 2, 3)  # [n_freq, n_time, Ant_tx, Ant_rx]
 
-    # Serving pilot sequence at RS frequencies
-    pilot_seq = pilots_serving[rs_freq]  # [n_freq]
+    # Serving pilot sequence at RS frequencies.
+    # When srs_rb_indices is used, pilots_serving already has length == n_freq
+    # (generated for SRS bandwidth only), so use it directly.
+    if srs_rb_indices is not None and len(pilots_serving) == n_freq:
+        pilot_seq = pilots_serving  # [n_freq]
+    else:
+        pilot_seq = pilots_serving[rs_freq]  # [n_freq]
 
     # -- Thermal noise --
     noise_std = 10.0 ** (-snr_dB / 20.0) / math.sqrt(2.0)
@@ -248,29 +294,54 @@ def estimate_channel_with_interference(
 
         if direction == "UL":
             # UL: BS receives SRS from UEs in neighboring (inter-cell) cells.
-            # Intra-cell SRS is orthogonal (comb + cyclic shift); interference
-            # comes from neighboring cells whose SRS overlaps in time-freq.
+            # Each interfering UE has its own independent channel when
+            # h_interferers_ul_per_ue is provided; otherwise all UEs in a
+            # cell share the cell-level channel (legacy fallback).
             # The number of active UEs per neighbor is randomized to model
             # scheduling uncertainty (0 to num_interfering_ues).
+            _has_per_ue = (
+                h_interferers_ul_per_ue is not None
+                and len(h_interferers_ul_per_ue) >= K_minus_1
+            )
             n_intf_total = 0
             for cell_k in range(K_minus_1):
-                h_intf_k = h_interferers[cell_k]  # [T, RB, BS_ant, UE_ant]
-                h_intf_at_pilots = h_intf_k[np.ix_(rs_time, rs_freq)]
-                h_intf_at_pilots = h_intf_at_pilots.transpose(1, 0, 2, 3)
-
                 intf_cell_id = (
                     interferer_cell_ids[cell_k]
                     if interferer_cell_ids is not None and cell_k < len(interferer_cell_ids)
                     else serving_cell_id + cell_k + 1
                 )
 
-                n_active_ues = int(rng.integers(0, num_interfering_ues + 1))
-                for ue_idx in range(n_active_ues):
+                if _has_per_ue:
+                    n_ues_available = h_interferers_ul_per_ue[cell_k].shape[0]
+                else:
+                    n_ues_available = num_interfering_ues
+
+                n_active_ues = int(rng.integers(0, n_ues_available + 1))
+                active_ue_indices = (
+                    rng.choice(n_ues_available, size=n_active_ues, replace=False)
+                    if n_active_ues > 0
+                    else np.array([], dtype=np.intp)
+                )
+
+                for ue_idx in active_ue_indices:
+                    if _has_per_ue:
+                        h_ue = h_interferers_ul_per_ue[cell_k][ue_idx]
+                    else:
+                        h_ue = h_interferers[cell_k]
+                    h_ue_at_pilots = h_ue[np.ix_(rs_time, rs_freq)]
+                    h_ue_at_pilots = h_ue_at_pilots.transpose(1, 0, 2, 3)
+
                     intf_pilots = _generate_interferer_pilots_srs(
-                        RB, intf_cell_id, ue_idx,
+                        RB, intf_cell_id, int(ue_idx),
+                        slot=srs_slot,
+                        symbol=srs_symbol,
+                        group_hopping=srs_group_hopping,
+                        sequence_hopping=srs_sequence_hopping,
+                        K_TC=srs_K_TC,
+                        srs_num_rb=srs_num_rb,
                     )
                     X_intf = intf_pilots[rs_freq][:, None, None, None]
-                    interference_total += h_intf_at_pilots * X_intf
+                    interference_total += h_ue_at_pilots * X_intf
                     n_intf_total += 1
 
             logger.debug(
@@ -368,6 +439,14 @@ def estimate_paired_channels(
     num_interfering_ues: int = 3,
     reciprocity_noise_scale: float = 0.01,
     num_rb: int | None = None,
+    srs_group_hopping: bool = False,
+    srs_sequence_hopping: bool = False,
+    srs_comb: int = 2,
+    slot_idx: int = 0,
+    h_interferers_ul_per_ue: list[np.ndarray] | None = None,
+    dl_symbol_mask: np.ndarray | None = None,
+    ul_symbol_mask: np.ndarray | None = None,
+    srs_rb_indices: np.ndarray | None = None,
 ) -> PairedChannelResult:
     """Generate paired UL+DL estimated channels from a single DL ground truth.
 
@@ -431,8 +510,22 @@ def estimate_paired_channels(
         _generate_pilots_srs,
     )
 
-    pilots_srs = _generate_pilots_srs(num_rb, serving_cell_id)
-    pilots_csirs = _generate_pilots_csirs(num_rb, serving_cell_id)
+    # SRS pilot on first available UL symbol
+    _ul_syms = np.where(ul_symbol_mask)[0] if ul_symbol_mask is not None else [0]
+    _srs_symbol = int(_ul_syms[-1]) if len(_ul_syms) > 0 else 0
+    _srs_num_rb = len(srs_rb_indices) if srs_rb_indices is not None else None
+    pilots_srs = _generate_pilots_srs(
+        num_rb, serving_cell_id,
+        slot=slot_idx, symbol=_srs_symbol,
+        group_hopping=srs_group_hopping,
+        sequence_hopping=srs_sequence_hopping,
+        K_TC=srs_comb,
+        srs_num_rb=_srs_num_rb,
+    )
+    # CSI-RS pilot on first available DL symbol
+    _dl_syms = np.where(dl_symbol_mask)[0] if dl_symbol_mask is not None else [0]
+    _csirs_symbol = int(_dl_syms[0]) if len(_dl_syms) > 0 else 0
+    pilots_csirs = _generate_pilots_csirs(num_rb, serving_cell_id, slot=slot_idx, symbol=_csirs_symbol)
 
     # -- UL estimation (BS receives SRS with multi-UE interference) --
     rng_ul_est = np.random.Generator(rng.bit_generator.jumped())  # type: ignore[attr-defined]
@@ -449,9 +542,19 @@ def estimate_paired_channels(
         subcarrier_spacing=subcarrier_spacing,
         serving_cell_id=serving_cell_id,
         num_interfering_ues=num_interfering_ues,
+        valid_symbol_mask=ul_symbol_mask,
+        srs_rb_indices=srs_rb_indices,
+        srs_slot=slot_idx,
+        srs_symbol=_srs_symbol,
+        srs_group_hopping=srs_group_hopping,
+        srs_sequence_hopping=srs_sequence_hopping,
+        srs_K_TC=srs_comb,
+        srs_num_rb=_srs_num_rb,
+        h_interferers_ul_per_ue=h_interferers_ul_per_ue,
     )
 
     # -- DL estimation (UE receives CSI-RS with multi-cell interference) --
+    # DL uses CSI-RS which covers full band — no srs_rb_indices
     rng_dl_est = np.random.Generator(rng.bit_generator.jumped())  # type: ignore[attr-defined]
     dl_result = estimate_channel_with_interference(
         h_serving_true=h_dl_true,
@@ -465,11 +568,18 @@ def estimate_paired_channels(
         tau_rms_ns=tau_rms_ns,
         subcarrier_spacing=subcarrier_spacing,
         serving_cell_id=serving_cell_id,
+        valid_symbol_mask=dl_symbol_mask,
     )
 
+    # Transpose UL back to contract shape [T, RB, BS_ant, UE_ant].
+    # Internally UL is [T, RB, UE_ant, BS_ant] (physical), but contract
+    # stores everything uniformly as [T, RB, BS_ant, UE_ant].
+    h_ul_true_out = h_ul_true.transpose(0, 1, 3, 2).astype(np.complex64)
+    h_ul_est_out = ul_result.h_est.transpose(0, 1, 3, 2).astype(np.complex64)
+
     return {
-        "h_ul_true": h_ul_true,
-        "h_ul_est": ul_result.h_est,
+        "h_ul_true": h_ul_true_out,
+        "h_ul_est": h_ul_est_out,
         "h_dl_true": h_dl_true.astype(np.complex64),
         "h_dl_est": dl_result.h_est,
         "ul_sir_dB": ul_result.sir_dB,

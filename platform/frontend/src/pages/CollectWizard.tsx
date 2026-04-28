@@ -84,14 +84,44 @@ const UE_ANTENNA_OPTIONS = [1, 2, 4, 8];
 const BANDWIDTH_OPTIONS = [
   { label: '5 MHz', value: 5_000_000 },
   { label: '10 MHz', value: 10_000_000 },
+  { label: '15 MHz', value: 15_000_000 },
   { label: '20 MHz', value: 20_000_000 },
+  { label: '25 MHz', value: 25_000_000 },
+  { label: '30 MHz', value: 30_000_000 },
   { label: '40 MHz', value: 40_000_000 },
   { label: '50 MHz', value: 50_000_000 },
+  { label: '60 MHz', value: 60_000_000 },
+  { label: '70 MHz', value: 70_000_000 },
   { label: '80 MHz', value: 80_000_000 },
+  { label: '90 MHz', value: 90_000_000 },
   { label: '100 MHz', value: 100_000_000 },
-  { label: '200 MHz', value: 200_000_000 },
-  { label: '400 MHz', value: 400_000_000 },
 ];
+const SCS_OPTIONS = [
+  { label: '15 kHz', value: 15_000 },
+  { label: '30 kHz', value: 30_000 },
+  { label: '60 kHz', value: 60_000 },
+  { label: '120 kHz', value: 120_000 },
+];
+
+// 3GPP TS 38.101 Table 5.3.2-1: (bandwidth_MHz, scs_kHz) → N_RB
+const NR_RB_TABLE: Record<string, number> = {
+  '5_15': 25, '10_15': 52, '15_15': 79, '20_15': 106, '25_15': 133,
+  '30_15': 160, '40_15': 216, '50_15': 270,
+  '5_30': 11, '10_30': 24, '15_30': 38, '20_30': 51, '25_30': 65,
+  '30_30': 78, '40_30': 106, '50_30': 133, '60_30': 162, '70_30': 189,
+  '80_30': 217, '90_30': 245, '100_30': 273,
+  '10_60': 11, '15_60': 18, '20_60': 24, '25_60': 31, '30_60': 38,
+  '40_60': 51, '50_60': 65, '60_60': 79, '70_60': 93, '80_60': 107,
+  '90_60': 121, '100_60': 135,
+  '50_120': 32, '100_120': 66, '200_120': 132, '400_120': 264,
+};
+
+function nrRbLookup(bandwidthHz: number, scsHz: number): number | null {
+  const bwMhz = Math.round(bandwidthHz / 1e6);
+  const scsKhz = Math.round(scsHz / 1e3);
+  return NR_RB_TABLE[`${bwMhz}_${scsKhz}`] ?? null;
+}
+
 const CARRIER_FREQ_OPTIONS = [
   { label: '700 MHz', value: 700_000_000 },
   { label: '2.1 GHz', value: 2_100_000_000 },
@@ -128,6 +158,7 @@ interface BSConfigValues {
   num_bs_rx_ant: number;
   carrier_freq_hz: number;
   bandwidth_hz: number;
+  subcarrier_spacing: number;
   tx_power_dbm: number;
 }
 
@@ -156,6 +187,10 @@ interface ChannelConfigValues {
   srs_sequence_hopping: boolean;
   srs_periodicity: number;
   srs_b_hop: number;
+  srs_comb: number;
+  srs_c_srs: number;
+  srs_b_srs: number;
+  srs_n_rrc: number;
   osm_path?: string;
 }
 
@@ -166,6 +201,8 @@ interface QuadrigaRealValues {
   ue_speed_kmh: number;
   mobility_mode: 'static' | 'linear' | 'random_walk' | 'random_waypoint';
   carrier_freq_hz: number;
+  bandwidth_hz: number;
+  subcarrier_spacing: number;
   scenario: string;
   num_snapshots: number;
   ues_per_shard: number;
@@ -194,6 +231,7 @@ const DEFAULT_BS: BSConfigValues = {
   num_bs_rx_ant: 64,
   carrier_freq_hz: 3_500_000_000,
   bandwidth_hz: 100_000_000,
+  subcarrier_spacing: 30_000,
   tx_power_dbm: 43,
 };
 
@@ -221,7 +259,11 @@ const DEFAULT_CHANNEL: ChannelConfigValues = {
   srs_group_hopping: false,
   srs_sequence_hopping: false,
   srs_periodicity: 10,
-  srs_b_hop: 3,
+  srs_b_hop: 0,
+  srs_comb: 2,
+  srs_c_srs: 3,
+  srs_b_srs: 1,
+  srs_n_rrc: 0,
 };
 
 const DEFAULT_QUADRIGA_REAL: QuadrigaRealValues = {
@@ -231,6 +273,8 @@ const DEFAULT_QUADRIGA_REAL: QuadrigaRealValues = {
   ue_speed_kmh: 3,
   mobility_mode: 'linear',
   carrier_freq_hz: 3_500_000_000,
+  bandwidth_hz: 100_000_000,
+  subcarrier_spacing: 30_000,
   scenario: '3GPP_38.901_UMa_NLOS',
   num_snapshots: 14,
   ues_per_shard: 50,
@@ -289,6 +333,34 @@ const SRS_B_HOP_OPTIONS = [
   { label: '3 (不跳频)', value: 3 },
 ];
 
+const SRS_C_SRS_OPTIONS = [
+  { label: 'C_SRS=0 (4 RB)', value: 0 },
+  { label: 'C_SRS=1 (8 RB, 2×)', value: 1 },
+  { label: 'C_SRS=2 (12 RB, 3×)', value: 2 },
+  { label: 'C_SRS=3 (16 RB, 4×)', value: 3 },
+  { label: 'C_SRS=4 (16 RB, 2×2)', value: 4 },
+  { label: 'C_SRS=5 (20 RB, 5×)', value: 5 },
+  { label: 'C_SRS=6 (24 RB, 6×)', value: 6 },
+  { label: 'C_SRS=7 (24 RB, 2×3)', value: 7 },
+  { label: 'C_SRS=8 (28 RB, 7×)', value: 8 },
+  { label: 'C_SRS=9 (32 RB, 2×2×2)', value: 9 },
+  { label: 'C_SRS=10 (36 RB, 3×3)', value: 10 },
+  { label: 'C_SRS=11 (40 RB, 2×5)', value: 11 },
+  { label: 'C_SRS=12 (48 RB, 3×2×2)', value: 12 },
+  { label: 'C_SRS=13 (48 RB, 2×2×3)', value: 13 },
+  { label: 'C_SRS=14 (52 RB, 13×)', value: 14 },
+  { label: 'C_SRS=15 (56 RB, 2×7)', value: 15 },
+  { label: 'C_SRS=16 (60 RB, 3×5)', value: 16 },
+  { label: 'C_SRS=17 (64 RB, 2×2×4)', value: 17 },
+];
+
+const SRS_B_SRS_OPTIONS = [
+  { label: 'B_SRS=0 (全带宽发送)', value: 0 },
+  { label: 'B_SRS=1 (一级细分)', value: 1 },
+  { label: 'B_SRS=2 (二级细分)', value: 2 },
+  { label: 'B_SRS=3 (三级细分)', value: 3 },
+];
+
 const TDD_PATTERN_OPTIONS = [
   { label: 'DDDSU (3D+S+1U, 5ms)', value: 'DDDSU' },
   { label: 'DDSUU (2D+S+2U, 5ms)', value: 'DDSUU' },
@@ -303,11 +375,9 @@ const TDD_PATTERN_OPTIONS = [
 
 const DL_PILOT_OPTIONS = [
   { label: 'CSI-RS (Gold 序列)', value: 'csi_rs_gold' },
-  { label: 'SSB (PSS/SSS)', value: 'ssb' },
 ];
 const UL_PILOT_OPTIONS = [
   { label: 'SRS (ZC 序列)', value: 'srs_zc' },
-  { label: 'DMRS (PUSCH)', value: 'dmrs_pusch' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -522,17 +592,15 @@ export default function CollectWizard() {
     config.srs_sequence_hopping = channelConfig.srs_sequence_hopping;
     config.srs_periodicity = channelConfig.srs_periodicity;
     config.srs_b_hop = channelConfig.srs_b_hop;
+    config.srs_comb = channelConfig.srs_comb;
+    config.srs_c_srs = channelConfig.srs_c_srs;
+    config.srs_b_srs = channelConfig.srs_b_srs;
+    config.srs_n_rrc = channelConfig.srs_n_rrc;
     config.num_samples = channelConfig.num_samples;
     config.num_interfering_ues = channelConfig.num_interfering_ues;
 
-    if (channelConfig.link === 'DL') {
-      config.pilot_type = channelConfig.pilot_type_dl;
-    } else if (channelConfig.link === 'UL') {
-      config.pilot_type = channelConfig.pilot_type_ul;
-    } else {
-      config.pilot_type_dl = channelConfig.pilot_type_dl;
-      config.pilot_type_ul = channelConfig.pilot_type_ul;
-    }
+    config.pilot_type_dl = channelConfig.pilot_type_dl;
+    config.pilot_type_ul = channelConfig.pilot_type_ul;
     if (source === 'sionna_rt' && channelConfig.scenario) {
       config.scenario = channelConfig.scenario;
       if (channelConfig.scenario === 'custom_osm' && channelConfig.osm_path) {
@@ -724,6 +792,27 @@ export default function CollectWizard() {
                     <Col span={12}>
                       <Form.Item label="时间快照数" name="num_snapshots" tooltip="每个 UE 的时间采样点数">
                         <InputNumber min={1} max={100} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Row gutter={16}>
+                    <Col span={8}>
+                      <Form.Item label="系统带宽" name="bandwidth_hz" rules={[{ required: true }]}>
+                        <Select options={BANDWIDTH_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
+                      <Form.Item label="子载波间隔" name="subcarrier_spacing" rules={[{ required: true }]}>
+                        <Select options={SCS_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
+                      <Form.Item label="RB 数（自动）" tooltip="根据带宽+SCS 查 3GPP TS 38.101 标准表自动计算">
+                        <InputNumber
+                          value={nrRbLookup(qrConfig.bandwidth_hz, qrConfig.subcarrier_spacing)}
+                          disabled
+                          style={{ width: '100%' }}
+                        />
                       </Form.Item>
                     </Col>
                   </Row>
@@ -962,7 +1051,31 @@ export default function CollectWizard() {
                     </Col>
                   </Row>
                   <Row gutter={16}>
-                    <Col span={12}>
+                    <Col span={8}>
+                      <Form.Item
+                        label="子载波间隔"
+                        name="subcarrier_spacing"
+                        tooltip="NR 子载波间隔 (μ=0→15kHz, μ=1→30kHz, μ=2→60kHz, μ=3→120kHz)"
+                        rules={[{ required: true, message: '请选择子载波间隔' }]}
+                      >
+                        <Select options={SCS_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
+                      <Form.Item label="RB 数 (自动)">
+                        <InputNumber
+                          value={nrRbLookup(bsConfig.bandwidth_hz, bsConfig.subcarrier_spacing)}
+                          disabled
+                          style={{ width: '100%' }}
+                          placeholder={
+                            nrRbLookup(bsConfig.bandwidth_hz, bsConfig.subcarrier_spacing)
+                              ? undefined
+                              : '该组合非标准'
+                          }
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
                       <Form.Item
                         label="发射功率 (dBm)"
                         name="tx_power_dbm"
@@ -1252,7 +1365,7 @@ export default function CollectWizard() {
               </Col>
             </Row>
             <Row gutter={16}>
-              <Col span={12}>
+              <Col span={8}>
                 <Form.Item
                   label="SRS 周期 (T_SRS)"
                   name="srs_periodicity"
@@ -1261,13 +1374,57 @@ export default function CollectWizard() {
                   <Select options={SRS_PERIODICITY_OPTIONS} />
                 </Form.Item>
               </Col>
-              <Col span={12}>
+              <Col span={8}>
                 <Form.Item
                   label="SRS 频域跳频 (b_hop)"
                   name="srs_b_hop"
                   tooltip="频域跳频参数 (38.211 §6.4.1.4.3)，b_hop < B_SRS 时启用频域跳频；b_hop ≥ B_SRS 时不跳频"
                 >
                   <Select options={SRS_B_HOP_OPTIONS} />
+                </Form.Item>
+              </Col>
+              <Col span={8}>
+                <Form.Item
+                  label="SRS 传输梳齿 (K_TC)"
+                  name="srs_comb"
+                  tooltip="SRS 传输梳齿 K_TC (38.211 §6.4.1.4.2)，决定 SRS 的频域密度"
+                >
+                  <Select
+                    options={[
+                      { label: 'K_TC = 2', value: 2 },
+                      { label: 'K_TC = 4', value: 4 },
+                      { label: 'K_TC = 8', value: 8 },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={8}>
+                <Form.Item
+                  label="SRS 带宽配置 (C_SRS)"
+                  name="srs_c_srs"
+                  tooltip="SRS 带宽配置索引 (38.211 Table 6.4.1.4.3-1)，决定 SRS 总带宽和跳频树结构"
+                >
+                  <Select options={SRS_C_SRS_OPTIONS} />
+                </Form.Item>
+              </Col>
+              <Col span={8}>
+                <Form.Item
+                  label="SRS 带宽层级 (B_SRS)"
+                  name="srs_b_srs"
+                  tooltip="带宽树层级 (38.211 §6.4.1.4.3)，决定每次 SRS 发送覆盖的 RB 数。B_SRS 越大单次覆盖越窄，跳频倍数越高"
+                >
+                  <Select options={SRS_B_SRS_OPTIONS} />
+                </Form.Item>
+              </Col>
+              <Col span={8}>
+                <Form.Item
+                  label="SRS 频域起始位置 (n_RRC)"
+                  name="srs_n_rrc"
+                  tooltip="RRC 配置的 SRS 频域起始 RB 位置 (38.211 §6.4.1.4.3)"
+                >
+                  <InputNumber min={0} max={270} style={{ width: '100%' }} />
                 </Form.Item>
               </Col>
             </Row>
@@ -1350,6 +1507,9 @@ export default function CollectWizard() {
                     <Descriptions.Item label="站间距">{qrConfig.isd_m} m</Descriptions.Item>
                     <Descriptions.Item label="基站高度">{qrConfig.tx_height_m} m</Descriptions.Item>
                     <Descriptions.Item label="载波频率">{freqLabel(qrConfig.carrier_freq_hz)}</Descriptions.Item>
+                    <Descriptions.Item label="带宽">{bwLabel(qrConfig.bandwidth_hz)}</Descriptions.Item>
+                    <Descriptions.Item label="子载波间隔">{Math.round(qrConfig.subcarrier_spacing / 1000)} kHz</Descriptions.Item>
+                    <Descriptions.Item label="RB 数">{nrRbLookup(qrConfig.bandwidth_hz, qrConfig.subcarrier_spacing) ?? '—'}</Descriptions.Item>
                     <Descriptions.Item label="运动模式">{mobilityLabel(qrConfig.mobility_mode)}</Descriptions.Item>
                     <Descriptions.Item label="UE 速度">{qrConfig.ue_speed_kmh} km/h</Descriptions.Item>
                     <Descriptions.Item label="BS 天线">{qrConfig.bs_ant_v}V x {qrConfig.bs_ant_h}H = {qrConfig.bs_ant_v * qrConfig.bs_ant_h}</Descriptions.Item>
@@ -1383,6 +1543,12 @@ export default function CollectWizard() {
                     </Descriptions.Item>
                     <Descriptions.Item label="带宽">
                       {bwLabel(bsConfig.bandwidth_hz)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="子载波间隔">
+                      {bsConfig.subcarrier_spacing / 1000} kHz
+                    </Descriptions.Item>
+                    <Descriptions.Item label="RB 数">
+                      {nrRbLookup(bsConfig.bandwidth_hz, bsConfig.subcarrier_spacing) ?? '非标准组合'}
                     </Descriptions.Item>
                     <Descriptions.Item label="发射功率">{bsConfig.tx_power_dbm} dBm</Descriptions.Item>
                   </Descriptions>
@@ -1468,7 +1634,13 @@ export default function CollectWizard() {
                   {channelConfig.srs_periodicity} slots
                 </Descriptions.Item>
                 <Descriptions.Item label="SRS 频域跳频">
-                  {channelConfig.srs_b_hop >= 3 ? '不跳频' : `b_hop=${channelConfig.srs_b_hop}`}
+                  {channelConfig.srs_b_hop >= channelConfig.srs_b_srs ? '不跳频' : `b_hop=${channelConfig.srs_b_hop}, 跳频开启`}
+                </Descriptions.Item>
+                <Descriptions.Item label="SRS 带宽配置">
+                  C_SRS={channelConfig.srs_c_srs}, B_SRS={channelConfig.srs_b_srs}, n_RRC={channelConfig.srs_n_rrc}
+                </Descriptions.Item>
+                <Descriptions.Item label="SRS 梳齿">
+                  K_TC = {channelConfig.srs_comb}
                 </Descriptions.Item>
                 <Descriptions.Item label="邻区干扰 UE 上限">
                   {channelConfig.num_interfering_ues}

@@ -142,8 +142,9 @@
         },
         "bandwidth_hz": {
           "type": "number",
-          "default": 100000000.0,
-          "description": "System bandwidth in Hz"
+          "enum": [5000000, 10000000, 15000000, 20000000, 25000000, 30000000, 40000000, 50000000, 60000000, 70000000, 80000000, 90000000, 100000000],
+          "default": 100000000,
+          "description": "System bandwidth in Hz (NR FR1 standard values)"
         },
         "fft_size": {
           "type": "integer",
@@ -155,8 +156,9 @@
         },
         "subcarrier_spacing": {
           "type": "number",
-          "default": 30000.0,
-          "description": "Subcarrier spacing in Hz"
+          "enum": [15000, 30000, 60000, 120000],
+          "default": 30000,
+          "description": "Subcarrier spacing in Hz (15/30/60/120 kHz per 3GPP NR)"
         },
         "num_bs_ant": {
           "type": "integer",
@@ -261,6 +263,477 @@
             "required": ["x", "y"]
           },
           "description": "Custom UE positions from frontend drag-and-drop"
+        },
+        "tdd_pattern": {
+          "type": "string",
+          "enum": ["DDDSU", "DDSUU", "DDDDDDDSUU", "DDDSUDDSUU", "DSUUD"],
+          "default": "DDDSU",
+          "description": "TDD slot pattern per 3GPP TS 38.213 §11.1"
+        },
+        "srs_periodicity": {
+          "type": "integer",
+          "enum": [1, 2, 4, 5, 8, 10, 16, 20, 32, 40, 64, 80, 160, 320, 640, 1280, 2560],
+          "default": 10,
+          "description": "SRS transmission periodicity in slots (3GPP TS 38.211 Table 6.4.1.4.4-1)"
+        },
+        "srs_group_hopping": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SRS group hopping (mutually exclusive with sequence hopping)"
+        },
+        "srs_sequence_hopping": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SRS sequence hopping (mutually exclusive with group hopping)"
+        },
+        "srs_comb": {
+          "type": "integer",
+          "enum": [2, 4, 8],
+          "default": 2,
+          "description": "SRS transmission comb K_TC per 3GPP TS 38.211 §6.4.1.4.2"
+        },
+        "srs_c_srs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 17,
+          "default": 3,
+          "description": "SRS bandwidth configuration index (38.211 Table 6.4.1.4.3-1), determines total SRS allocation and hopping tree"
+        },
+        "srs_b_srs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 1,
+          "description": "SRS bandwidth level (38.211 §6.4.1.4.3), higher value = narrower single-TX bandwidth, more hopping positions"
+        },
+        "srs_n_rrc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "RRC-configured SRS frequency-domain starting RB position (38.211 §6.4.1.4.3)"
+        },
+        "srs_b_hop": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 0,
+          "description": "SRS frequency hopping parameter (38.211 §6.4.1.4.3), b_hop < B_SRS enables hopping"
+        }
+      }
+    },
+    "data_internal_sim": {
+      "type": "object",
+      "title": "Data (internal_sim)",
+      "properties": {
+        "source": {
+          "type": "string",
+          "default": "internal_sim"
+        },
+        "scenario": {
+          "type": "string",
+          "enum": ["UMa_NLOS", "UMi_NLOS", "InF"],
+          "default": "UMa_NLOS",
+          "description": "3GPP TR 38.901 propagation scenario"
+        },
+        "channel_model": {
+          "type": "string",
+          "enum": ["TDL-A", "TDL-B", "TDL-C", "TDL-D", "TDL-E"],
+          "default": "TDL-C",
+          "description": "TDL channel model profile"
+        },
+        "num_sites": {
+          "type": "integer",
+          "default": 7,
+          "description": "Number of BS sites"
+        },
+        "num_ues": {
+          "type": "integer",
+          "default": 5
+        },
+        "num_interfering_ues": {
+          "type": "integer",
+          "default": 3,
+          "description": "Number of interfering UEs per cell for UL interference"
+        },
+        "num_samples": {
+          "type": "integer",
+          "default": 10
+        },
+        "isd_m": {
+          "type": "number",
+          "default": 500.0,
+          "description": "Inter-site distance in metres"
+        },
+        "sectors_per_site": {
+          "type": "integer",
+          "enum": [1, 3],
+          "default": 3,
+          "description": "1 (omni) or 3 (tri-sector)"
+        },
+        "carrier_freq_hz": {
+          "type": "number",
+          "default": 3500000000.0,
+          "description": "Carrier frequency in Hz"
+        },
+        "bandwidth_hz": {
+          "type": "number",
+          "enum": [5000000, 10000000, 15000000, 20000000, 25000000, 30000000, 40000000, 50000000, 60000000, 70000000, 80000000, 90000000, 100000000],
+          "default": 100000000,
+          "description": "System bandwidth in Hz (NR standard values). RB count auto-derived per 3GPP TS 38.101"
+        },
+        "subcarrier_spacing": {
+          "type": "number",
+          "enum": [15000, 30000, 60000, 120000],
+          "default": 30000,
+          "description": "Subcarrier spacing in Hz (15/30/60/120 kHz)"
+        },
+        "num_ofdm_symbols": {
+          "type": "integer",
+          "default": 14
+        },
+        "num_bs_tx_ant": {
+          "type": "integer",
+          "default": 4,
+          "description": "BS transmit antennas"
+        },
+        "num_bs_rx_ant": {
+          "type": "integer",
+          "default": 4,
+          "description": "BS receive antennas"
+        },
+        "num_ue_tx_ant": {
+          "type": "integer",
+          "default": 2,
+          "description": "UE transmit antennas"
+        },
+        "num_ue_rx_ant": {
+          "type": "integer",
+          "default": 2,
+          "description": "UE receive antennas"
+        },
+        "tx_power_dbm": {
+          "type": ["number", "null"],
+          "default": null,
+          "description": "BS transmit power in dBm. If null, auto-selects per scenario: UMa=43, UMi=33, InF=24 dBm"
+        },
+        "ue_speed_kmh": {
+          "type": "number",
+          "default": 3.0,
+          "description": "UE mobility speed in km/h"
+        },
+        "mobility_mode": {
+          "type": "string",
+          "enum": ["static", "linear", "random_walk", "random_waypoint"],
+          "default": "static",
+          "description": "UE mobility model"
+        },
+        "ue_distribution": {
+          "type": "string",
+          "enum": ["uniform", "clustered", "hotspot"],
+          "default": "uniform",
+          "description": "UE spatial distribution strategy"
+        },
+        "pilot_type": {
+          "type": "string",
+          "enum": ["srs_zc", "csi_rs_gold"],
+          "default": "csi_rs_gold"
+        },
+        "pilot_type_dl": {
+          "type": "string",
+          "enum": ["srs_zc", "csi_rs_gold"],
+          "default": "csi_rs_gold",
+          "description": "DL pilot type (used when link == both)"
+        },
+        "pilot_type_ul": {
+          "type": "string",
+          "enum": ["srs_zc", "csi_rs_gold"],
+          "default": "srs_zc",
+          "description": "UL pilot type (used when link == both)"
+        },
+        "channel_est_mode": {
+          "type": "string",
+          "enum": ["ideal", "ls_linear", "ls_mmse"],
+          "default": "ls_linear"
+        },
+        "link": {
+          "type": "string",
+          "enum": ["UL", "DL", "both"],
+          "default": "DL"
+        },
+        "tdd_pattern": {
+          "type": "string",
+          "enum": ["DDDSU", "DDSUU", "DDDDDDDSUU", "DDDSUDDSUU", "DSUUD"],
+          "default": "DDDSU",
+          "description": "TDD slot pattern per 3GPP TS 38.213 §11.1"
+        },
+        "srs_periodicity": {
+          "type": "integer",
+          "enum": [1, 2, 4, 5, 8, 10, 16, 20, 32, 40, 64, 80, 160, 320, 640, 1280, 2560],
+          "default": 10,
+          "description": "SRS transmission periodicity in slots (3GPP TS 38.211 Table 6.4.1.4.4-1)"
+        },
+        "srs_group_hopping": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SRS group hopping (mutually exclusive with sequence hopping)"
+        },
+        "srs_sequence_hopping": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SRS sequence hopping (mutually exclusive with group hopping)"
+        },
+        "srs_comb": {
+          "type": "integer",
+          "enum": [2, 4, 8],
+          "default": 2,
+          "description": "SRS transmission comb K_TC per 3GPP TS 38.211 §6.4.1.4.2"
+        },
+        "srs_c_srs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 17,
+          "default": 3,
+          "description": "SRS bandwidth configuration index (38.211 Table 6.4.1.4.3-1)"
+        },
+        "srs_b_srs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 1,
+          "description": "SRS bandwidth level (38.211 §6.4.1.4.3)"
+        },
+        "srs_n_rrc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "RRC-configured SRS frequency-domain starting RB position"
+        },
+        "srs_b_hop": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 0,
+          "description": "SRS frequency hopping parameter, b_hop < B_SRS enables hopping"
+        },
+        "custom_site_positions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "z": { "type": "number" }
+            },
+            "required": ["x", "y"]
+          },
+          "description": "Custom BS positions from frontend drag-and-drop"
+        },
+        "custom_ue_positions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "z": { "type": "number" }
+            },
+            "required": ["x", "y"]
+          },
+          "description": "Custom UE positions from frontend drag-and-drop"
+        }
+      }
+    },
+    "data_quadriga_real": {
+      "type": "object",
+      "title": "Data (quadriga_real)",
+      "properties": {
+        "source": {
+          "type": "string",
+          "default": "quadriga_real"
+        },
+        "scenario": {
+          "type": "string",
+          "enum": ["3GPP_38.901_UMa_NLOS", "3GPP_38.901_UMa_LOS", "3GPP_38.901_UMi_NLOS", "3GPP_38.901_UMi_LOS", "3GPP_38.901_InF_NLOS"],
+          "default": "3GPP_38.901_UMa_NLOS",
+          "description": "QuaDRiGa scenario tag"
+        },
+        "num_cells": {
+          "type": "integer",
+          "default": 7,
+          "description": "Number of BS cells"
+        },
+        "num_samples": {
+          "type": "integer",
+          "default": 1000
+        },
+        "num_snapshots": {
+          "type": "integer",
+          "default": 14,
+          "description": "Time snapshots per UE"
+        },
+        "ues_per_shard": {
+          "type": "integer",
+          "default": 50,
+          "description": "UEs per MATLAB shard"
+        },
+        "isd_m": {
+          "type": "number",
+          "default": 500.0,
+          "description": "Inter-site distance in metres"
+        },
+        "carrier_freq_hz": {
+          "type": "number",
+          "default": 3500000000.0,
+          "description": "Carrier frequency in Hz"
+        },
+        "bandwidth_hz": {
+          "type": "number",
+          "enum": [5000000, 10000000, 15000000, 20000000, 25000000, 30000000, 40000000, 50000000, 60000000, 70000000, 80000000, 90000000, 100000000],
+          "default": 100000000,
+          "description": "System bandwidth in Hz (NR FR1 standard values). RB count auto-derived per 3GPP TS 38.101"
+        },
+        "subcarrier_spacing": {
+          "type": "number",
+          "enum": [15000, 30000, 60000, 120000],
+          "default": 30000,
+          "description": "Subcarrier spacing in Hz (15/30/60/120 kHz)"
+        },
+        "tx_height_m": {
+          "type": "number",
+          "default": 25.0,
+          "description": "BS antenna height in metres"
+        },
+        "rx_height_m": {
+          "type": "number",
+          "default": 1.5,
+          "description": "UE height in metres"
+        },
+        "cell_radius_m": {
+          "type": "number",
+          "default": 250.0,
+          "description": "UE drop radius in metres"
+        },
+        "ue_speed_kmh": {
+          "type": "number",
+          "default": 3.0,
+          "description": "UE mobility speed in km/h"
+        },
+        "mobility_mode": {
+          "type": "string",
+          "enum": ["static", "linear", "random_walk", "random_waypoint"],
+          "default": "linear",
+          "description": "UE mobility model"
+        },
+        "bs_ant_v": {
+          "type": "integer",
+          "default": 4,
+          "description": "BS vertical antenna elements"
+        },
+        "bs_ant_h": {
+          "type": "integer",
+          "default": 8,
+          "description": "BS horizontal antenna elements"
+        },
+        "ue_ant_v": {
+          "type": "integer",
+          "default": 1,
+          "description": "UE vertical antenna elements"
+        },
+        "ue_ant_h": {
+          "type": "integer",
+          "default": 2,
+          "description": "UE horizontal antenna elements"
+        },
+        "pilot_type_ul": {
+          "type": "string",
+          "enum": ["srs_zc", "csi_rs_gold"],
+          "default": "srs_zc",
+          "description": "UL pilot type"
+        },
+        "pilot_type_dl": {
+          "type": "string",
+          "enum": ["srs_zc", "csi_rs_gold"],
+          "default": "csi_rs_gold",
+          "description": "DL pilot type"
+        },
+        "channel_est_mode": {
+          "type": "string",
+          "enum": ["ideal", "ls_linear", "ls_mmse"],
+          "default": "ls_linear"
+        },
+        "link": {
+          "type": "string",
+          "enum": ["UL", "DL", "both"],
+          "default": "UL"
+        },
+        "num_interfering_ues": {
+          "type": "integer",
+          "default": 3,
+          "description": "Number of interfering UEs per cell"
+        },
+        "tdd_pattern": {
+          "type": "string",
+          "enum": ["DDDSU", "DDSUU", "DDDDDDDSUU", "DDDSUDDSUU", "DSUUD"],
+          "default": "DDDSU",
+          "description": "TDD slot pattern per 3GPP TS 38.213 §11.1"
+        },
+        "srs_periodicity": {
+          "type": "integer",
+          "enum": [1, 2, 4, 5, 8, 10, 16, 20, 32, 40, 64, 80, 160, 320, 640, 1280, 2560],
+          "default": 10,
+          "description": "SRS transmission periodicity in slots (3GPP TS 38.211 Table 6.4.1.4.4-1)"
+        },
+        "srs_group_hopping": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SRS group hopping (mutually exclusive with sequence hopping)"
+        },
+        "srs_sequence_hopping": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SRS sequence hopping (mutually exclusive with group hopping)"
+        },
+        "srs_comb": {
+          "type": "integer",
+          "enum": [2, 4, 8],
+          "default": 2,
+          "description": "SRS transmission comb K_TC per 3GPP TS 38.211 §6.4.1.4.2"
+        },
+        "srs_c_srs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 17,
+          "default": 3,
+          "description": "SRS bandwidth configuration index (38.211 Table 6.4.1.4.3-1)"
+        },
+        "srs_b_srs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 1,
+          "description": "SRS bandwidth level (38.211 §6.4.1.4.3)"
+        },
+        "srs_n_rrc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "RRC-configured SRS frequency-domain starting RB position"
+        },
+        "srs_b_hop": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 0,
+          "description": "SRS frequency hopping parameter, b_hop < B_SRS enables hopping"
+        },
+        "seed": {
+          "type": "integer",
+          "default": 42
+        },
+        "skip_generation": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, only read existing .mat files"
         }
       }
     },
