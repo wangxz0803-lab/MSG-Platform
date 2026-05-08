@@ -1,4 +1,4 @@
-"""Auto-report generation for MSG-Embedding."""
+"""Auto-report generation for ChannelHub."""
 
 from __future__ import annotations
 

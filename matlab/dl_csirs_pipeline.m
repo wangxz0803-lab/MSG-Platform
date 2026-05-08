@@ -86,10 +86,8 @@ function [Y_csirs, H_dl_est, sinr_dB, sir_dB] = dl_csirs_pipeline( ...
             H_dl_est = ls_linear_estimate_dl(Y_csirs, X_all(serving_cell_id, :), ...
                 H_true_contract);
         case 'ls_mmse'
-            H_dl_est = ls_linear_estimate_dl(Y_csirs, X_all(serving_cell_id, :), ...
-                H_true_contract);
-            warning('dl_csirs_pipeline:MmseTodo', ...
-                '''ls_mmse'' falls back to LS+linear; MMSE is a Phase 1.5 TODO');
+            H_dl_est = ls_mmse_estimate_dl(Y_csirs, X_all(serving_cell_id, :), ...
+                H_true_contract, sig_pow, noise_linear);
         otherwise
             error('dl_csirs_pipeline:BadEstMode', 'unknown est_mode=%s', est_mode);
     end
@@ -136,6 +134,41 @@ function H_est = ls_linear_estimate_dl(Y, X_serving, H_true_contract)
         H_true_sum_b = squeeze(H_true_sum_b);              % [T, RB, UE]
         ratio = H_true_b ./ H_true_sum_b;                  % [T, RB, UE]
         H_est(:, :, b, :) = single(H_ls_ue .* ratio);
+    end
+end
+
+
+function H_est = ls_mmse_estimate_dl(Y, X_serving, H_true_contract, sig_pow, noise_linear)
+%LS_MMSE_ESTIMATE_DL  LS + LMMSE frequency-domain smoothing for DL.
+    [T, RB, UE] = size(Y);
+    BS = size(H_true_contract, 3);
+    X_abs2 = abs(X_serving) .^ 2 + eps;
+
+    H_ls_ue = Y .* repmat(reshape(conj(X_serving) ./ X_abs2, 1, RB, 1), T, 1, UE);
+
+    % LMMSE smoothing along frequency
+    tau_rms = 300e-9;
+    delta_f = 30e3 * 12;
+    rb_idx = (0:RB-1).';
+    freq_diff = abs(rb_idx - rb_idx.');
+    R_hh = exp(-2 * pi * tau_rms * freq_diff * delta_f);
+    snr_lin = max(sig_pow, eps) / max(noise_linear, eps);
+    W = R_hh / (R_hh + (1 / max(snr_lin, 1e-6)) * eye(RB));
+
+    H_ls_smoothed = complex(zeros(T, RB, UE, 'single'));
+    for t = 1:T
+        for u = 1:UE
+            H_ls_smoothed(t, :, u) = single((W * squeeze(H_ls_ue(t, :, u)).').');
+        end
+    end
+
+    % Project onto BS antennas using true channel ratio
+    H_est = complex(zeros(T, RB, BS, UE, 'single'));
+    for b = 1:BS
+        H_true_b = squeeze(H_true_contract(:, :, b, :));
+        H_true_sum_b = squeeze(sum(H_true_contract, 3) + eps);
+        ratio = H_true_b ./ H_true_sum_b;
+        H_est(:, :, b, :) = single(H_ls_smoothed .* ratio);
     end
 end
 

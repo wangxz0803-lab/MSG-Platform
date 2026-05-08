@@ -12,9 +12,10 @@ legacy bridge:
    (with Capon fallback), and stash the result in ``norm_stats['interference']``
    rather than expanding the token sequence — this keeps the FeatureExtractor
    API (and its 16-slot layout) untouched.
-3. **Legacy fallback**: when ``use_legacy_pmi=True``, we reuse the legacy
-   ``bridge_channel_to_pretrain`` PMI/SRS computation so feature coverage
-   matches the in-tree training runs.
+3. **Self-contained PMI**: 38.214 Type I codebook generation and beam search
+   are implemented without external CSV/VAM dependencies. When
+   ``use_legacy_pmi=True``, we first try the CSV-backed path and fall back
+   to the self-contained codebook (NOT SVD) if unavailable.
 """
 
 from __future__ import annotations
@@ -75,10 +76,20 @@ _INTF_DOA_GRID: int = 181  # azimuth grid [-90, 90] deg, 1-deg resolution
 # ---------------------------------------------------------------------------
 
 
-def _compute_dft_matrix(num_antennas: int) -> np.ndarray:
-    """Return a ``[N, N]`` complex128 DFT beam matrix (normalised)."""
+def _compute_dft_matrix(num_antennas: int, array_spacing: float = 0.5) -> np.ndarray:
+    """Return a ``[N, N]`` DFT beam matrix using physical steering angles.
+
+    Matches ``SSBBeamGenerator.generate_dft_beams`` from the original code:
+    angles uniformly spaced in [-π/2, π/2), phase = exp(j·2π·d·sin(θ)·n)/√N.
+    """
     n = int(num_antennas)
-    return np.fft.fft(np.eye(n)) / np.sqrt(n)
+    beams = np.zeros((n, n), dtype=np.complex128)
+    for beam_idx in range(n):
+        theta = np.pi * (beam_idx / n - 0.5)
+        kd = 2 * np.pi * array_spacing * np.sin(theta)
+        for ant_idx in range(n):
+            beams[ant_idx, beam_idx] = np.exp(1j * kd * ant_idx) / np.sqrt(n)
+    return beams
 
 
 # ---------------------------------------------------------------------------
@@ -89,26 +100,19 @@ def _compute_dft_matrix(num_antennas: int) -> np.ndarray:
 def _compute_pdp(h: np.ndarray, n_taps: int = _PDP_TAPS) -> np.ndarray:
     """Return a length-``n_taps`` PDP in ``[0, 1]`` from ``h[T, RB, BS, UE]``.
 
-    Computation: average over time, take first UE antenna → [RB, BS],
-    IFFT along freq axis → power → average over BS → normalise to [0,1].
+    Matches original ``compute_pdp``: IFFT along RB axis on the full 4-D array,
+    scale by √RB (Parseval), take power, average over T/BS/UE, normalise.
     """
-    # Average over time: [T, RB, BS, UE] -> [RB, BS, UE]
-    h_avg_freq = np.mean(h, axis=0)
-    # Take first UE antenna: [RB, BS]
-    h_flat = h_avg_freq[:, :, 0]
-    # IFFT along freq axis (axis=0, the RB axis) -> power delay profile
-    pdp = np.abs(np.fft.ifft(h_flat, axis=0)) ** 2  # [RB, BS]
-    # Average over BS antennas: [RB]
-    pdp = np.mean(pdp, axis=1)
-    # Normalise to [0, 1]
-    mx = float(pdp.max())
-    if mx > NORM_EPS:
-        pdp = pdp / mx
-    # Crop / zero-pad to n_taps
+    rb = h.shape[1]
+    ht = np.fft.ifft(h, axis=1) * np.sqrt(rb)
+    pdp = np.mean(np.abs(ht) ** 2, axis=(0, 2, 3)).real  # [RB]
     out = np.zeros(n_taps, dtype=np.float32)
-    cut = min(n_taps, pdp.shape[0])
-    out[:cut] = pdp[:cut].real.astype(np.float32)
-    return out
+    n = min(len(pdp), n_taps)
+    out[:n] = pdp[:n]
+    mx = float(out.max())
+    if mx > NORM_EPS:
+        out = out / mx
+    return out.astype(np.float32)
 
 
 def _compute_rsrp_srs(h: np.ndarray) -> np.ndarray:
@@ -117,17 +121,21 @@ def _compute_rsrp_srs(h: np.ndarray) -> np.ndarray:
     mean(|h|^2) per BS antenna, averaged over T, RB, UE.
     """
     pwr = np.mean(np.abs(h) ** 2, axis=(0, 1, 3))  # [BS]
-    rsrp = 10.0 * np.log10(pwr + 1e-30) + REF_POWER_OFFSET
-    return rsrp.astype(np.float32)
+    rsrp = 10.0 * np.log10(pwr + NORM_EPS) + REF_POWER_OFFSET
+    return np.clip(rsrp, -160.0, -60.0).astype(np.float32)
 
 
-def _compute_rsrp_cb(beam_power: np.ndarray) -> np.ndarray:
-    """Beam-domain RSRP in dBm from pre-computed beam power array.
+def _compute_rsrp_cb(h_avg: np.ndarray, dft_matrix: np.ndarray) -> np.ndarray:
+    """Beam-domain RSRP in dBm.
 
-    ``beam_power`` is ``[N]`` — linear beam-domain power from DFT token step.
+    ``h_avg``: ``[BS, UE]`` — time-freq averaged channel.
+    ``dft_matrix``: ``[BS, BS]`` — physical DFT beam matrix.
+    Applies matched filter ``dft^H @ H_avg``, averages power over all UE.
     """
-    rsrp = 10.0 * np.log10(beam_power + 1e-30) + REF_POWER_OFFSET
-    return rsrp.astype(np.float32)
+    h_beam = dft_matrix.conj().T @ h_avg  # [num_beams, UE]
+    pwr = np.mean(np.abs(h_beam) ** 2, axis=1)  # avg UE → [num_beams]
+    rsrp = 10.0 * np.log10(pwr + NORM_EPS) + REF_POWER_OFFSET
+    return np.clip(rsrp, -160.0, -60.0).astype(np.float32)
 
 
 def _srs_svd(h_avg: np.ndarray) -> tuple[list[np.ndarray], np.ndarray]:
@@ -200,58 +208,172 @@ def _srs_from_covariance(
     return srs, s4
 
 
-def _pmi_svd_fallback(h_avg: np.ndarray, vh: np.ndarray) -> list[np.ndarray]:
-    """SVD-based PMI fallback: use right singular vectors ``Vh`` rows as PMI.
+def _pmi_svd_fallback(h_avg: np.ndarray) -> tuple[list[np.ndarray], int, int]:
+    """SVD-based PMI fallback: use **U left singular vectors** as PMI.
 
-    ``h_avg``: ``[BS, UE]`` — only used for dimension.
-    ``vh``:    ``[min(BS,UE), UE]`` — right singular vectors from SVD of h_avg.
-    Returns 4 PMI vectors, each zero-padded/truncated to ``_TX_ANT_NUM_MAX``.
+    ``h_avg``: ``[BS, UE]`` — time-freq averaged channel.
+    Returns ``(pmi_list, ri, cqi)`` where each PMI vector is [BS]-dimensional,
+    matching the original ``bridge_channel_to_pretrain._pmi_svd_fallback``.
     """
+    bs = h_avg.shape[0]
+    u, s, _ = _scipy_svd(h_avg, full_matrices=False)
+    ri = max(1, min(4, int(np.sum(s > s[0] * 0.1)))) if len(s) > 0 else 1
     pmi_list: list[np.ndarray] = []
     for i in range(4):
-        if i < vh.shape[0]:
-            pmi_vec = vh[i, :].astype(np.complex64)  # [UE] or [min(BS,UE)]
+        if i < u.shape[1]:
+            pmi_list.append(u[:, i].astype(np.complex64))
         else:
-            pmi_vec = np.zeros(vh.shape[1] if vh.ndim > 1 else 1, dtype=np.complex64)
-        pmi_list.append(pmi_vec)
-    return pmi_list
+            pmi_list.append(np.zeros(bs, dtype=np.complex64))
+    se = float(np.sum(np.log2(1.0 + s[:ri] ** 2 / 1e-10))) if len(s) > 0 else 0.0
+    cqi = int(np.clip(int(np.argmin([abs(se - c) for c in CQI_TABLE])), 0, 15))
+    return pmi_list, ri, cqi
 
 
-def _pmi_dft_codebook_search(
+def _generate_type_i_codebook(
+    n1: int,
+    o1: int,
+    n2: int,
+    o2: int,
+    dual_pol: bool = True,
+) -> np.ndarray:
+    """Generate 38.214 Type I single-panel PMI codebook (self-contained).
+
+    Builds oversampled DFT vectors for horizontal (N1, O1) and vertical
+    (N2, O2) dimensions, Kronecker-products them, then extends to dual
+    polarisation ``w = [v; phi*v]/sqrt(2)`` with 4 QPSK co-phase values.
+
+    Returns codebook ``[ports, total_beams]`` complex128.
+    ``ports`` = ``2*N1*N2`` for dual-pol, ``N1*N2`` for single-pol.
+    """
+    dft_h = np.zeros((n1, n1 * o1), dtype=np.complex128)
+    for k in range(n1 * o1):
+        for n in range(n1):
+            dft_h[n, k] = np.exp(-1j * 2 * np.pi * n * k / (n1 * o1)) / np.sqrt(n1)
+
+    dft_v = np.zeros((n2, n2 * o2), dtype=np.complex128)
+    for k in range(n2 * o2):
+        for n in range(n2):
+            dft_v[n, k] = np.exp(-1j * 2 * np.pi * n * k / (n2 * o2)) / np.sqrt(n2)
+
+    n_spatial = n1 * n2
+    n_beams_spatial = n1 * o1 * n2 * o2
+    spatial = np.zeros((n_spatial, n_beams_spatial), dtype=np.complex128)
+    for i1 in range(n1 * o1):
+        for i2 in range(n2 * o2):
+            vec = np.kron(dft_v[:, i2], dft_h[:, i1])
+            norm = np.linalg.norm(vec)
+            if norm > 1e-10:
+                vec = vec / norm
+            spatial[:, i1 * (n2 * o2) + i2] = vec
+
+    if dual_pol:
+        co_phases = [np.exp(1j * np.pi * p / 2) for p in range(4)]
+        n_total = n_beams_spatial * 4
+        codebook = np.zeros((2 * n_spatial, n_total), dtype=np.complex128)
+        for b in range(n_beams_spatial):
+            v = spatial[:, b]
+            for p, phi in enumerate(co_phases):
+                codebook[:, b * 4 + p] = np.concatenate([v, phi * v]) / np.sqrt(2)
+    else:
+        codebook = spatial
+
+    return codebook
+
+
+def _pmi_type_i_codebook_search(
     h_avg: np.ndarray,
-    oversampling: int = 4,
-) -> list[np.ndarray]:
-    """DFT codebook PMI: Type-I single-panel search (3GPP 38.214 §5.2.2.2.1).
+    antenna_layout: str = "8H4V",
+) -> tuple[list[np.ndarray], int, int]:
+    """38.214 Type I PMI codebook search on DL channel — self-contained.
 
-    Builds an oversampled DFT codebook of size ``N_tx * oversampling``, then
-    selects the top-4 beams by projection power onto ``h_avg[:, 0]``.
+    Generates the protocol DFT codebook for the given antenna layout,
+    searches best beams by capacity maximisation, returns (pmi_list, ri, cqi).
 
-    Returns 4 PMI vectors (complex64), each of length ``N_tx``.
+    No external CSV or VAM dependencies — codebook is pure 38.214 math.
+    The VAM port-compression step from the legacy code is skipped; the
+    codebook is applied directly to the physical channel.
+
+    ``h_avg``: ``[BS, UE]`` time-freq averaged DL channel.
+    ``antenna_layout``: one of ``"8H4V"``, ``"16H2V"``, ``"4T4R"``.
     """
-    n_tx = h_avg.shape[0]
-    n_beams = n_tx * oversampling
-    codebook = np.zeros((n_beams, n_tx), dtype=np.complex128)
-    for b in range(n_beams):
-        codebook[b, :] = np.exp(1j * 2 * np.pi * b * np.arange(n_tx) / n_beams) / np.sqrt(n_tx)
+    bs, ue = h_avg.shape
 
-    h_col = h_avg[:, 0]  # [N_tx] — first UE antenna
-    proj_power = np.abs(codebook @ h_col) ** 2  # [n_beams]
-    top4_idx = np.argsort(proj_power)[::-1][:4]
+    if antenna_layout == "8H4V":
+        n_h, n_v = 8, 4
+    elif antenna_layout == "16H2V":
+        n_h, n_v = 16, 2
+    elif antenna_layout == "4T4R":
+        n_h, n_v = 2, 2
+    else:
+        n_h = int(np.sqrt(bs // 2)) if bs >= 4 else bs
+        n_v = max(1, (bs // 2) // n_h) if bs >= 4 else 1
+
+    n_spatial = n_h * n_v
+    dual_pol = (bs == 2 * n_spatial)
+
+    if not dual_pol and bs != n_spatial:
+        n_spatial = bs
+        n_h = bs
+        n_v = 1
+        dual_pol = False
+
+    o1, o2 = 4, (4 if n_v > 1 else 1)
+
+    if dual_pol:
+        n1_cb = n_h
+        n2_cb = n_v
+    else:
+        n1_cb = n_h
+        n2_cb = n_v
+
+    codebook = _generate_type_i_codebook(n1_cb, o1, n2_cb, o2, dual_pol=dual_pol)
+
+    cb_ports = codebook.shape[0]
+    h_use = h_avg[:cb_ports, :]
+
+    n_beam = codebook.shape[1]
+    noise_pwr = 1e-3
+
+    # Vectorised beam gain: mean |w^H h|^2 over UE antennas
+    proj = codebook.conj().T @ h_use  # [n_beam, UE]
+    beam_gain = np.mean(np.abs(proj) ** 2, axis=1)  # [n_beam]
+
+    ri_max = min(4, ue, n_beam)
+    best_ri = 1
+    best_cap = -1.0
+    best_s: np.ndarray | None = None
+
+    for ri_cand in range(1, ri_max + 1):
+        top_beams = np.argsort(beam_gain)[-ri_cand:][::-1]
+        W = codebook[:, top_beams]
+        H_eff = W.conj().T @ h_use
+        _, S, _ = _scipy_svd(H_eff, full_matrices=False)
+        cap = float(np.sum(np.log2(1.0 + S ** 2 / noise_pwr)))
+
+        if cap > best_cap:
+            best_cap = cap
+            best_ri = ri_cand
+            best_s = S[:ri_cand].copy()
+
+    top_beams_final = np.argsort(beam_gain)[-best_ri:][::-1]
+    pmi_weights = codebook[:, top_beams_final]
 
     pmi_list: list[np.ndarray] = []
     for i in range(4):
-        if i < len(top4_idx):
-            pmi_list.append(codebook[top4_idx[i], :].astype(np.complex64))
+        if i < best_ri and i < pmi_weights.shape[1]:
+            pmi_list.append(pmi_weights[:, i].astype(np.complex64))
         else:
-            pmi_list.append(np.zeros(n_tx, dtype=np.complex64))
-    return pmi_list
+            pmi_list.append(np.zeros(cb_ports, dtype=np.complex64))
+
+    se = float(np.sum(np.log2(1.0 + best_s ** 2 / noise_pwr))) if best_s is not None else 0.0
+    cqi = int(np.clip(np.argmin([abs(se - c) for c in CQI_TABLE]), 0, 15))
+
+    return pmi_list, best_ri, cqi
 
 
 def _legacy_pmi_tokens(h_sim: np.ndarray) -> tuple[list[np.ndarray], int, int]:
-    """Try the legacy CSV-backed PMI generator; silently fall back to SVD on error."""
+    """Try the legacy CSV-backed PMI generator; fall back to self-contained Type I codebook."""
     try:
-        # The legacy code lives at the repo root — we only need it when the
-        # caller opts into ``use_legacy_pmi`` and a direct PMI is absent.
         repo_root = Path(__file__).resolve().parents[3]
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
@@ -269,21 +391,10 @@ def _legacy_pmi_tokens(h_sim: np.ndarray) -> tuple[list[np.ndarray], int, int]:
             else:
                 pmi_list.append(np.zeros(bs, dtype=np.complex64))
         return pmi_list, int(ri), int(cqi)
-    except Exception as exc:  # pragma: no cover - fallback path is data-dependent
-        _LOGGER.warning("legacy PMI unavailable (%s); using SVD fallback", exc)
-        # Fall back to SVD-based PMI using h_sim layout
-        bs = h_sim.shape[0]
+    except Exception as exc:
+        _LOGGER.info("legacy CSV PMI unavailable (%s); using self-contained Type I codebook", exc)
         h_avg = h_sim[:, :, :, 0].mean(axis=2)  # [BS, UE]
-        _, s, vh = _scipy_svd(h_avg, full_matrices=False)
-        pmi_list = _pmi_svd_fallback(h_avg, vh)
-        if len(s) == 0:
-            ri = 1
-            cqi_val = 0
-        else:
-            ri = max(1, min(4, int(np.sum(s > s[0] * 0.1))))
-            se = float(np.sum(np.log2(1.0 + s[:ri] ** 2 / 1e-10)))
-            cqi_val = int(np.clip(int(np.argmin([abs(se - c) for c in CQI_TABLE])), 0, 15))
-        return pmi_list, ri, cqi_val
+        return _pmi_type_i_codebook_search(h_avg, antenna_layout="8H4V")
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +646,15 @@ def _build_feat_dict(
     else:
         h_dl = sample.h_serving_est
 
+    # TDD reciprocity fix: h_ul may be stored as [T, RB, UE, BS] (transposed
+    # from DL). Detect via h_serving_est which is always [T, RB, BS, UE], and
+    # transpose h_ul/h_dl back to [T, RB, BS, UE] if needed.
+    ref_bs = sample.h_serving_est.shape[2]
+    if h_ul.shape[2] != ref_bs and h_ul.shape[3] == ref_bs:
+        h_ul = h_ul.transpose(0, 1, 3, 2)
+    if h_dl.shape[2] != ref_bs and h_dl.shape[3] == ref_bs:
+        h_dl = h_dl.transpose(0, 1, 3, 2)
+
     h = h_ul  # primary channel for dimensional reference
     t, rb, bs, ue = h.shape
 
@@ -553,8 +673,9 @@ def _build_feat_dict(
     R_hh = _compute_spatial_covariance_iir(h_ul, alpha=0.2)
     srs_cov_list, srs_cov_eigvals = _srs_from_covariance(R_hh)
 
-    # SVD of DL average — needed for PMI fallback (Vh right singular vectors).
-    _, sigma, vh_svd = _scipy_svd(h_dl_avg, full_matrices=False)
+    # DFT beam matrix — shared by DFT tokens and RSRP_CB.
+    n_dft = min(bs, _TX_ANT_NUM_MAX)
+    dft_matrix = _compute_dft_matrix(n_dft)
 
     # =====================================================================
     # Token 0: PDP  [1, 64] float32 — from UL channel
@@ -587,27 +708,26 @@ def _build_feat_dict(
         # Reshape DL channel to legacy layout [BS, UE, T*RB, 1] for CsiChanProcFunc.
         t_dl, rb_dl, bs_dl, ue_dl = h_dl.shape
         h_sim = h_dl.transpose(2, 3, 0, 1).reshape(bs_dl, ue_dl, t_dl * rb_dl, 1)
-        pmi_list, _, _ = _legacy_pmi_tokens(h_sim)
+        pmi_list, _pmi_ri, pmi_cqi = _legacy_pmi_tokens(h_sim)
     else:
-        # DFT codebook search (Type-I single-panel, 3GPP 38.214) on DL channel
-        pmi_list = _pmi_dft_codebook_search(h_dl_avg)
+        # Self-contained 38.214 Type I codebook search on DL channel.
+        pmi_list, _pmi_ri, pmi_cqi = _pmi_type_i_codebook_search(h_dl_avg)
     for i, vec in enumerate(pmi_list, start=1):
         feat[f"pmi{i}"] = torch.from_numpy(_pad_bs(vec, _TX_ANT_NUM_MAX)).unsqueeze(0)
 
     # =====================================================================
     # Tokens 9-12: DFT beams  [1, 64] complex64 each — from UL channel
-    # Top-4 energy DFT beams of UL h_avg.
+    # Matched filter dft^H @ H_avg, sum energy over all UE, top-4 beams.
+    # Returns dft_matrix columns (steering vectors).
     # =====================================================================
-    n_dft = min(bs, _TX_ANT_NUM_MAX)
-    dft_matrix = _compute_dft_matrix(n_dft)  # [N, N]
-    beam_response = dft_matrix @ h_ul_avg[:n_dft, 0]  # [N] beam-domain channel
-    beam_power = np.abs(beam_response) ** 2  # [N] linear power per beam
+    beam_response = dft_matrix.conj().T @ h_ul_avg[:n_dft, :]  # [N, UE]
+    beam_energy = np.sum(np.abs(beam_response) ** 2, axis=1)  # [N]
 
     n_beams = min(4, n_dft)
-    top4_idx = np.argsort(beam_power)[::-1][:n_beams]
+    top4_idx = np.argsort(beam_energy)[-n_beams:][::-1]
     for i in range(4):
         if i < n_beams:
-            dft_vec = dft_matrix[top4_idx[i], :].astype(np.complex64)  # [N] beam row
+            dft_vec = dft_matrix[:, top4_idx[i]].astype(np.complex64)  # column
         else:
             dft_vec = np.zeros(n_dft, dtype=np.complex64)
         dft_padded = np.zeros(_TX_ANT_NUM_MAX, dtype=np.complex64)
@@ -625,8 +745,9 @@ def _build_feat_dict(
 
     # =====================================================================
     # Token 14: rsrp_cb  [1, 64] float32 — beam-domain RSRP in dBm
+    # dft^H @ H_avg, avg power over all UE, same DFT matrix as tokens 9-12.
     # =====================================================================
-    rsrp_cb_raw = _compute_rsrp_cb(beam_power)  # [N] float32
+    rsrp_cb_raw = _compute_rsrp_cb(h_ul_avg[:n_dft, :], dft_matrix)  # [N]
     rsrp_cb_pad = np.full(_TX_ANT_NUM_MAX, -160.0, dtype=np.float32)
     n_cb = min(n_dft, _TX_ANT_NUM_MAX)
     rsrp_cb_pad[:n_cb] = rsrp_cb_raw[:n_cb]
@@ -638,12 +759,9 @@ def _build_feat_dict(
     # =====================================================================
     cell_rsrp = np.full(_CELL_RSRP_DIM, -160.0, dtype=np.float32)
     if sample.ssb_rsrp_dBm is not None and len(sample.ssb_rsrp_dBm) > 0:
-        rsrp_sorted = sorted(sample.ssb_rsrp_dBm, reverse=True)
-        n_cells = min(len(rsrp_sorted), _CELL_RSRP_DIM)
+        n_cells = min(len(sample.ssb_rsrp_dBm), _CELL_RSRP_DIM)
         for i in range(n_cells):
-            cell_rsrp[i] = float(rsrp_sorted[i])
-    else:
-        cell_rsrp[0] = -110.0  # default serving cell
+            cell_rsrp[i] = float(np.clip(sample.ssb_rsrp_dBm[i], -160.0, -60.0))
     feat["cell_rsrp"] = torch.from_numpy(cell_rsrp).unsqueeze(0)
 
     # =====================================================================
@@ -659,28 +777,10 @@ def _build_feat_dict(
 
     # =====================================================================
     # Gate: cqi  [1] int64 — Channel Quality Index 0-15
-    # When precoding weights are available, compute effective per-layer
-    # SINR from the precoded channel for a more accurate CQI.
+    # CQI is derived from the PMI computation above (spectral efficiency
+    # → CQI table lookup), matching the original bridge behaviour.
     # =====================================================================
-    _w_dl = sample.w_dl if sample.w_dl is not None else (sample.meta.get("w_dl") if sample.meta else None)
-    if _w_dl is not None and isinstance(_w_dl, np.ndarray) and _w_dl.ndim == 3:
-        from msg_embedding.phy_sim.precoding import apply_precoding
-        try:
-            h_eff = apply_precoding(h_dl, _w_dl)  # [T, RB, rank, UE_ant]
-            eff_power = float(np.mean(np.abs(h_eff) ** 2))
-            noise_lin = 10.0 ** (-float(sample.snr_dB) / 10.0)
-            eff_sinr_lin = eff_power / max(noise_lin, 1e-30)
-            if sample.sir_dB is not None:
-                intf_lin = 10.0 ** (-float(sample.sir_dB) / 10.0)
-                eff_sinr_lin = eff_power / max(noise_lin + intf_lin, 1e-30)
-            eff_sinr_db = float(10.0 * np.log10(max(eff_sinr_lin, 1e-15)))
-            eff_sinr_db = float(np.clip(eff_sinr_db, -50.0, 50.0))
-            cqi = _cqi_from_sinr(eff_sinr_db)
-        except Exception:
-            cqi = _cqi_from_sinr(sample.sinr_dB)
-    else:
-        cqi = _cqi_from_sinr(sample.sinr_dB)
-    feat["cqi"] = torch.tensor([int(cqi)], dtype=torch.int64)
+    feat["cqi"] = torch.tensor([int(pmi_cqi)], dtype=torch.int64)
 
     # =====================================================================
     # Context / metadata
@@ -732,9 +832,9 @@ def sample_to_features(
         An instance of :class:`tools.FeatureExtractor` (not imported here to
         avoid a hard dependency on the legacy root-level ``tools.py``).
     use_legacy_pmi
-        If ``True`` (default), fall back to the legacy PMI generator (with
-        its SVD fallback). Setting this to ``False`` skips the CSV-dependent
-        legacy path and always uses SVD.
+        If ``True`` (default), try the CSV-backed legacy PMI generator first,
+        falling back to the self-contained 38.214 Type I codebook search if
+        unavailable. If ``False``, use the self-contained codebook directly.
 
     Returns
     -------

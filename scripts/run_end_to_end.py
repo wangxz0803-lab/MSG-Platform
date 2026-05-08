@@ -333,7 +333,7 @@ def _run_inference(bridge_dir: Path, ckpt_path: Path) -> np.ndarray:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print(f"MSG-Embedding End-to-End Pipeline  ({datetime.now():%Y-%m-%d %H:%M})")
+    print(f"ChannelHub End-to-End Pipeline  ({datetime.now():%Y-%m-%d %H:%M})")
     print("=" * 60)
 
     collect_dirs = {

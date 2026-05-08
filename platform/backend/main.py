@@ -1,4 +1,4 @@
-"""FastAPI application factory + startup hooks for the MSG-Embedding backend."""
+"""FastAPI application factory + startup hooks for the ChannelHub backend."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build and return the configured FastAPI application."""
     app = FastAPI(
-        title="MSG-Embedding Research Platform API",
+        title="ChannelHub Platform API",
         description="Backend API for data, jobs, runs, models and configs.",
         version=__version__,
         lifespan=_lifespan,

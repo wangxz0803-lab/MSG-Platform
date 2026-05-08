@@ -10,10 +10,11 @@ Public API
 
 from __future__ import annotations
 
-from .hex_grid import CellSite, hex_ring_positions, make_hex_grid
+from .hex_grid import CellSite, hex_ring_positions, make_hex_grid, make_linear_grid
 from .pci_planner import (
     PciPlanResult,
     assign_pci_graph_coloring,
+    assign_pci_hypercell,
     assign_pci_mod3,
 )
 from .scenarios import (
@@ -29,9 +30,11 @@ __all__ = [
     "PciPlanResult",
     "Scenario",
     "assign_pci_graph_coloring",
+    "assign_pci_hypercell",
     "assign_pci_mod3",
     "hex_ring_positions",
     "make_hex_grid",
+    "make_linear_grid",
     "scenario_indoor_factory",
     "scenario_macro_19site_3sector",
     "scenario_micro_dense",

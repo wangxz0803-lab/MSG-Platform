@@ -1,6 +1,6 @@
-# MSG-Embedding research platform - docker-compose orchestration (CPU default)
+# ChannelHub platform - docker-compose orchestration (CPU default)
 
-name: msg-embedding
+name: channelhub
 
 services:
   redis:

@@ -1,4 +1,4 @@
-"""MSG-Embedding platform backend (FastAPI + SQLAlchemy)."""
+"""ChannelHub platform backend (FastAPI + SQLAlchemy)."""
 
 from __future__ import annotations
 

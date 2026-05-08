@@ -22,8 +22,7 @@ const { Title, Paragraph, Text } = Typography;
 const JOB_TYPE_OPTIONS: { value: JobType; label: string; section: string; description: string }[] = [
   { value: 'convert', label: 'Convert', section: 'convert', description: '将原始采集数据转换为标准数据集格式。' },
   { value: 'bridge', label: 'Bridge', section: 'bridge', description: '构建预训练桥接数据集。' },
-  { value: 'train', label: 'Train', section: 'train,model', description: '使用 MSG 损失进行表征训练。' },
-  { value: 'eval', label: 'Eval', section: 'eval', description: '评估已训练的检查点。' },
+  { value: 'eval', label: 'Eval', section: 'eval', description: '评估已导入模型的检查点。' },
   { value: 'infer', label: 'Infer', section: 'infer', description: '为数据集生成嵌入向量。' },
   { value: 'export', label: 'Export', section: 'export', description: '将检查点导出为 ONNX / TorchScript。' },
   { value: 'report', label: 'Report', section: 'report', description: '生成 HTML/Markdown 报告。' },
@@ -33,7 +32,7 @@ const JOB_TYPE_OPTIONS: { value: JobType; label: string; section: string; descri
 export default function JobCreate() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
-  const [type, setType] = useState<JobType>('train');
+  const [type, setType] = useState<JobType>('simulate');
   const [displayName, setDisplayName] = useState<string>('');
   const [formData, setFormData] = useState<Record<string, unknown>>({});
 
@@ -48,33 +47,12 @@ export default function JobCreate() {
   const typeOpt = JOB_TYPE_OPTIONS.find((o) => o.value === type)!;
   const isCollectFlow = type === 'simulate';
 
-  const nestOverrides = (flat: Record<string, unknown>): Record<string, unknown> => {
-    const modelKeys = new Set([
-      'seq_len', 'token_dim', 'latent_dim', 'n_heads', 'encoder_layers',
-      'decoder_layers', 'ff_dim', 'dropout_p', 'mask_ratio', 'mask_ratio_v2',
-      'latent_out_dim', 'use_ground_truth_for_recon', 'norm_eps',
-    ]);
-    const model: Record<string, unknown> = {};
-    const train: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(flat)) {
-      if (modelKeys.has(k)) {
-        model[k] = v;
-      } else {
-        train[k] = v;
-      }
-    }
-    const out: Record<string, unknown> = {};
-    if (Object.keys(model).length > 0) out.model = model;
-    if (Object.keys(train).length > 0) out.train = train;
-    return out;
-  };
-
   const submit = async () => {
     try {
       if (batchMode) {
         const res = await createBatch.mutateAsync({
           type,
-          configs: batchConfigs.map((c) => type === 'train' ? nestOverrides(c) : c),
+          configs: batchConfigs,
           display_name_prefix: displayName || `batch-${type}`,
         });
         message.success(`已创建 ${res.jobs.length} 个任务`);
@@ -86,7 +64,7 @@ export default function JobCreate() {
       } else {
         const job = await createJob.mutateAsync({
           type,
-          config_overrides: type === 'train' ? nestOverrides(formData) : formData,
+          config_overrides: formData,
           display_name: displayName || undefined,
         });
         message.success(`任务 ${job.job_id} 已创建`);
@@ -145,7 +123,7 @@ export default function JobCreate() {
                 <Text>批量模式:</Text>
                 <Switch checked={batchMode} onChange={setBatchMode} />
                 {batchMode && (
-                  <Text type="secondary">提交多组不同参数配置进行对比训练</Text>
+                  <Text type="secondary">提交多组不同参数配置进行批量运行</Text>
                 )}
               </Space>
             <div style={{ marginTop: 24 }}>

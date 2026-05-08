@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChannelHub 平台 — 数据管理 · 模型验证 · 性能评估</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --card: #181b24;
+  --accent: #4f8cff;
+  --accent2: #7c5cfc;
+  --accent3: #00d4aa;
+  --accent4: #ff6b6b;
+  --accent5: #ffa94d;
+  --text: #e2e8f0;
+  --text-dim: #8892a4;
+  --border: #2a2f3e;
+  --glow: rgba(79,140,255,0.12);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--text); line-height:1.7; }
+
+.container { max-width:1240px; margin:0 auto; padding:0 24px; }
+section { padding:56px 0 40px; }
+section+section { border-top:1px solid var(--border); }
+
+/* ── Hero ── */
+.hero { text-align:center; padding:56px 20px 36px; border-bottom:1px solid var(--border); position:relative; }
+.hero::before { content:''; position:absolute; top:-100px; left:50%; transform:translateX(-50%); width:600px; height:600px; background:radial-gradient(circle,rgba(79,140,255,.07) 0%,transparent 70%); pointer-events:none; }
+.hero h1 { font-size:2.5rem; font-weight:800; background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:10px; }
+.hero p { color:var(--text-dim); font-size:1.05rem; max-width:720px; margin:0 auto; }
+.badge-row { margin-top:18px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+.badge { padding:4px 13px; border-radius:18px; font-size:.8rem; font-weight:600; border:1px solid var(--border); background:var(--card); }
+.badge.b1{border-color:var(--accent);color:var(--accent)} .badge.b2{border-color:var(--accent2);color:var(--accent2)} .badge.b3{border-color:var(--accent3);color:var(--accent3)} .badge.b4{border-color:var(--accent4);color:var(--accent4)} .badge.b5{border-color:var(--accent5);color:var(--accent5)}
+
+/* ── Nav ── */
+.toc { position:sticky; top:0; z-index:100; background:rgba(15,17,23,.92); backdrop-filter:blur(12px); border-bottom:1px solid var(--border); display:flex; justify-content:center; overflow-x:auto; }
+.toc a { display:block; padding:13px 18px; color:var(--text-dim); text-decoration:none; font-size:.85rem; font-weight:600; white-space:nowrap; border-bottom:2px solid transparent; transition:.2s; }
+.toc a:hover,.toc a.active { color:var(--accent); border-bottom-color:var(--accent); }
+
+/* ── Typography ── */
+.sec-title { font-size:1.7rem; font-weight:700; margin-bottom:6px; }
+.sec-sub { color:var(--text-dim); margin-bottom:32px; font-size:.98rem; }
+h4 { font-size:1rem; font-weight:700; margin-bottom:6px; }
+
+/* ── Cards ── */
+.g { display:grid; gap:18px; }
+.g2 { grid-template-columns:repeat(auto-fit,minmax(380px,1fr)); }
+.g3 { grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
+.g4 { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+.c { background:var(--card); border:1px solid var(--border); border-radius:13px; padding:24px; transition:transform .2s,border-color .2s; }
+.c:hover { transform:translateY(-2px); border-color:var(--accent); }
+.c h4 { display:flex; align-items:center; gap:8px; }
+.c p,.c li { font-size:.9rem; color:var(--text-dim); }
+.c ul { padding-left:16px; }
+.c li { margin-bottom:3px; }
+code { background:rgba(79,140,255,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.82rem; font-family:'Cascadia Code','Fira Code',monospace; }
+.fp { display:inline-block; margin-top:8px; font-size:.78rem; color:var(--accent3); opacity:.8; }
+
+/* ── Matrix ── */
+.matrix { width:100%; border-collapse:collapse; background:var(--card); border-radius:13px; overflow:hidden; border:1px solid var(--border); }
+.matrix th,.matrix td { padding:12px 16px; font-size:.86rem; border-bottom:1px solid var(--border); text-align:left; }
+.matrix th { background:rgba(79,140,255,.06); font-weight:700; color:var(--accent); font-size:.78rem; text-transform:uppercase; letter-spacing:.4px; }
+.matrix tr:last-child td { border-bottom:none; }
+.matrix tr:hover td { background:rgba(79,140,255,.03); }
+.tag { display:inline-block; padding:2px 8px; border-radius:5px; font-size:.75rem; font-weight:600; }
+.tag-full { background:rgba(0,212,170,.15); color:var(--accent3); }
+.tag-partial { background:rgba(255,169,77,.15); color:var(--accent5); }
+.tag-stub { background:rgba(255,107,107,.15); color:var(--accent4); }
+.tag-matlab { background:rgba(124,92,252,.12); color:var(--accent2); }
+.tag-new { background:rgba(79,140,255,.15); color:var(--accent); }
+
+/* ── Code ── */
+.cb { background:#13151d; border:1px solid var(--border); border-radius:9px; padding:18px 22px; overflow-x:auto; font-family:'Cascadia Code','Fira Code',monospace; font-size:.82rem; line-height:1.6; color:var(--text-dim); margin:12px 0; }
+.cb .kw{color:var(--accent2)} .cb .fn{color:var(--accent)} .cb .str{color:var(--accent3)} .cb .cm{color:#4a5568;font-style:italic} .cb .num{color:var(--accent5)}
+
+/* ── Flow ── */
+.flow-h { display:flex; align-items:stretch; gap:0; overflow-x:auto; padding:16px 0; }
+.flow-h .step { flex:1; min-width:110px; text-align:center; }
+.flow-h .box { background:var(--card); border:1px solid var(--border); border-radius:11px; padding:16px 10px; margin:0 4px; transition:border-color .2s; }
+.flow-h .box:hover { border-color:var(--accent); }
+.flow-h .box h5 { font-size:.85rem; margin-bottom:3px; }
+.flow-h .box .d { font-size:.74rem; color:var(--text-dim); }
+.flow-h .arr { display:flex; align-items:center; justify-content:center; width:32px; flex-shrink:0; color:var(--accent); font-size:1.2rem; }
+.flow-h .box .shape { display:inline-block; margin-top:6px; padding:2px 7px; background:rgba(79,140,255,.1); border-radius:5px; font-size:.68rem; color:var(--accent); font-family:monospace; }
+
+/* ── Pipeline (vertical) ── */
+.pipe { position:relative; padding-left:36px; }
+.pipe::before { content:''; position:absolute; left:12px; top:0; bottom:0; width:2px; background:linear-gradient(180deg,var(--accent),var(--accent2),var(--accent3)); border-radius:2px; }
+.pipe .n { position:relative; margin-bottom:22px; padding:18px 22px; background:var(--card); border:1px solid var(--border); border-radius:11px; }
+.pipe .n::before { content:''; position:absolute; left:-30px; top:22px; width:10px; height:10px; border-radius:50%; border:2px solid var(--accent); background:var(--bg); }
+.pipe .n h4 { margin-bottom:4px; }
+.pipe .n p { font-size:.86rem; color:var(--text-dim); }
+
+/* ── Tabs ── */
+.tabs { display:flex; gap:0; flex-wrap:wrap; }
+.tbtn { padding:9px 18px; background:transparent; border:1px solid var(--border); border-bottom:none; border-radius:9px 9px 0 0; color:var(--text-dim); font-size:.84rem; font-weight:600; cursor:pointer; transition:.2s; }
+.tbtn.on { background:var(--card); color:var(--accent); border-color:var(--accent); }
+.tp { display:none; border:1px solid var(--border); border-radius:0 12px 12px 12px; background:var(--card); padding:24px; }
+.tp.on { display:block; }
+
+/* ── Architecture ── */
+.arch { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:30px; overflow-x:auto; }
+.arch-row { display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+.ab { padding:10px 18px; border-radius:9px; font-size:.83rem; font-weight:600; text-align:center; min-width:110px; border:1px solid; transition:transform .2s; }
+.ab:hover { transform:scale(1.05); }
+.ab.t-in { background:rgba(79,140,255,.1); border-color:var(--accent); color:var(--accent); }
+.ab.t-enc { background:rgba(124,92,252,.1); border-color:var(--accent2); color:var(--accent2); }
+.ab.t-bn { background:rgba(0,212,170,.1); border-color:var(--accent3); color:var(--accent3); }
+.ab.t-dec { background:rgba(255,107,107,.1); border-color:var(--accent4); color:var(--accent4); }
+.ab.t-out { background:rgba(255,169,77,.1); border-color:var(--accent5); color:var(--accent5); }
+.arch-lbl { font-size:.73rem; color:var(--text-dim); text-align:center; margin-top:-6px; margin-bottom:10px; }
+.aarr { color:var(--text-dim); font-size:1.2rem; }
+
+/* ── Token Grid ── */
+.tok-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:7px; margin:14px 0; }
+.tok { padding:9px 5px; border-radius:7px; text-align:center; font-size:.76rem; font-weight:600; border:1px solid; }
+.tok .i { font-size:.62rem; opacity:.6; display:block; margin-bottom:1px; }
+.tok.tp1{background:rgba(79,140,255,.1);border-color:rgba(79,140,255,.3);color:var(--accent)} .tok.tp2{background:rgba(124,92,252,.1);border-color:rgba(124,92,252,.3);color:var(--accent2)} .tok.tp3{background:rgba(0,212,170,.1);border-color:rgba(0,212,170,.3);color:var(--accent3)} .tok.tp4{background:rgba(255,169,77,.1);border-color:rgba(255,169,77,.3);color:var(--accent5)} .tok.tp5{background:rgba(255,107,107,.1);border-color:rgba(255,107,107,.3);color:var(--accent4)}
+
+/* ── Big Flow (platform-level) ── */
+.bigflow { display:grid; grid-template-columns:repeat(5,1fr); gap:0; align-items:stretch; margin:24px 0; }
+.bigflow .bf-step { text-align:center; padding:20px 10px; position:relative; }
+.bigflow .bf-icon { font-size:2.2rem; margin-bottom:8px; display:block; }
+.bigflow .bf-title { font-size:.92rem; font-weight:700; margin-bottom:4px; }
+.bigflow .bf-desc { font-size:.76rem; color:var(--text-dim); }
+.bigflow .bf-arr { display:flex; align-items:center; justify-content:center; color:var(--accent); font-size:1.5rem; }
+.bf-box { background:var(--card); border:1px solid var(--border); border-radius:13px; padding:20px 14px; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; transition:border-color .2s; }
+.bf-box:hover { border-color:var(--accent); }
+.bf-ext { border-style:dashed !important; border-color:var(--accent5) !important; }
+.bf-ext:hover { border-color:var(--accent5) !important; }
+
+/* ── File Tree ── */
+.ftree { background:#13151d; border:1px solid var(--border); border-radius:9px; padding:18px 22px; font-family:'Cascadia Code','Fira Code',monospace; font-size:.8rem; line-height:1.9; color:var(--text-dim); overflow-x:auto; margin:12px 0; }
+.ftree .dir { color:var(--accent); font-weight:600; }
+.ftree .file { color:var(--text-dim); }
+.ftree .desc { color:#4a5568; font-style:italic; }
+.ftree .req { color:var(--accent3); font-weight:600; }
+.ftree .opt { color:var(--accent5); }
+
+/* ── Responsive ── */
+@media(max-width:900px){ .bigflow{grid-template-columns:1fr; gap:8px;} .bigflow .bf-arr{transform:rotate(90deg);padding:4px 0;} }
+@media(max-width:768px){ .g2,.g3,.g4{grid-template-columns:1fr} .hero h1{font-size:1.8rem} .arch-row{flex-direction:column} .aarr{transform:rotate(90deg)} }
+
+/* ── Fade ── */
+.fi { opacity:0; transform:translateY(16px); transition:opacity .45s,transform .45s; }
+.fi.vis { opacity:1; transform:none; }
+
+footer { text-align:center; padding:36px 20px; color:var(--text-dim); font-size:.8rem; border-top:1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<!-- ═══════ HERO ═══════ -->
+<header class="hero">
+  <h1>ChannelHub 平台</h1>
+  <p>5G NR 信道表征学习平台 — 多源数据管理 · 数据集发布 · 模型导入验证 · 性能评估</p>
+  <div class="badge-row">
+    <span class="badge b1">多源采集</span>
+    <span class="badge b2">统一管理</span>
+    <span class="badge b3">数据集发布</span>
+    <span class="badge b5">模型导入</span>
+    <span class="badge b4">性能评估</span>
+  </div>
+</header>
+
+<!-- ═══════ NAV ═══════ -->
+<nav class="toc">
+  <a href="#s-overview">平台总览</a>
+  <a href="#s-collect">多源采集</a>
+  <a href="#s-process">数据处理</a>
+  <a href="#s-manage">统一管理</a>
+  <a href="#s-export">数据集发布</a>
+  <a href="#s-import">模型导入</a>
+  <a href="#s-model">模型架构</a>
+  <a href="#s-infer">推理</a>
+  <a href="#s-eval">性能评估</a>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  1. OVERVIEW                                          -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-overview">
+<div class="container">
+  <h2 class="sec-title">平台全景</h2>
+  <p class="sec-sub">平台专注数据管理与模型验证，模型训练在公司训练平台独立完成</p>
+
+  <div class="fi" style="overflow-x:auto">
+    <div class="bigflow">
+      <div class="bf-step"><div class="bf-box">
+        <div class="bf-icon">&#x1F4E1;</div>
+        <div class="bf-title">多源数据采集</div>
+        <div class="bf-desc">Internal Sim<br/>Sionna RT<br/>QuaDRiGa</div>
+      </div></div>
+      <div class="bf-arr">&#x2192;</div>
+      <div class="bf-step"><div class="bf-box">
+        <div class="bf-icon">&#x2699;&#xFE0F;</div>
+        <div class="bf-title">数据处理 &amp; 管理</div>
+        <div class="bf-desc">ChannelSample 契约<br/>Bridge 特征提取<br/>Manifest 统一管理</div>
+      </div></div>
+      <div class="bf-arr">&#x2192;</div>
+      <div class="bf-step"><div class="bf-box">
+        <div class="bf-icon">&#x1F4E6;</div>
+        <div class="bf-title">数据集发布</div>
+        <div class="bf-desc">原始 + 特征 + 模型定义<br/>导出到公司训练平台</div>
+      </div></div>
+      <div class="bf-arr">&#x2190;</div>
+      <div class="bf-step"><div class="bf-box bf-ext">
+        <div class="bf-icon">&#x1F3CB;&#xFE0F;</div>
+        <div class="bf-title" style="color:var(--accent5)">公司训练平台</div>
+        <div class="bf-desc" style="color:var(--accent5)">外部独立训练<br/>导出模型权重</div>
+      </div></div>
+      <div class="bf-arr">&#x2192;</div>
+      <div class="bf-step"><div class="bf-box">
+        <div class="bf-icon">&#x1F50D;</div>
+        <div class="bf-title">模型导入 &amp; 评估</div>
+        <div class="bf-desc">结构+权重导入<br/>推理 · 性能评估<br/>测试结果输出</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="g3 fi" style="margin-top:24px;">
+    <div class="c">
+      <h4>&#x1F4CA; 平台职责</h4>
+      <ul>
+        <li>多源信道数据采集（3 种信道源）</li>
+        <li>统一数据契约 <code>ChannelSample</code></li>
+        <li>特征提取（Bridge → 16 Token）</li>
+        <li>Manifest 管理 + Web 可视化</li>
+        <li>数据集导出发布</li>
+        <li>模型结构 + 权重导入验证</li>
+        <li>推理（Latent 嵌入 / ONNX 导出）</li>
+        <li>性能评估（NMSE / TW / CT / KNN）</li>
+      </ul>
+    </div>
+    <div class="c" style="border-color:var(--accent5);">
+      <h4 style="color:var(--accent5)">&#x1F3CB;&#xFE0F; 公司训练平台（外部）</h4>
+      <ul>
+        <li>消费平台导出的数据集</li>
+        <li>使用平台提供的模型定义</li>
+        <li>MAE 预训练 + 对比学习</li>
+        <li>微调（Adapter / Full fine-tune）</li>
+        <li>导出 checkpoint 权重</li>
+      </ul>
+      <p style="margin-top:10px; font-size:.82rem; color:var(--accent5);">训练代码不在本平台内，由公司训练基础设施承担</p>
+    </div>
+    <div class="c">
+      <h4>&#x1F504; 完整闭环</h4>
+      <p>平台与训练平台形成数据-模型闭环：</p>
+      <ol style="padding-left:16px; font-size:.88rem; color:var(--text-dim);">
+        <li>平台采集 &amp; 处理数据</li>
+        <li>导出数据集到训练平台</li>
+        <li>训练平台训练模型</li>
+        <li>平台导入模型权重</li>
+        <li>平台运行推理 &amp; 评估</li>
+        <li>输出测试结果 &amp; 报告</li>
+      </ol>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  2. MULTI-SOURCE COLLECTION                           -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-collect">
+<div class="container">
+  <h2 class="sec-title">多源信道数据采集</h2>
+  <p class="sec-sub">三种信道源共享 DataSource ABC，通过 @register_source 注册，iter_samples() 输出统一 ChannelSample</p>
+
+  <!-- Capability Matrix -->
+  <div class="fi" style="overflow-x:auto;">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th>能力模块</th>
+          <th>Internal Sim</th>
+          <th>Sionna RT</th>
+          <th>QuaDRiGa</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>信道物理</strong></td>
+          <td><span class="tag tag-full">3GPP TDL</span> 纯 Python</td>
+          <td><span class="tag tag-full">光线追踪</span> GPU + TDL 回退</td>
+          <td><span class="tag tag-matlab">MATLAB 内部</span></td>
+        </tr>
+        <tr><td><strong>组网拓扑</strong></td>
+          <td><span class="tag tag-full">Python 完整</span> hex_grid + pci_planner</td>
+          <td><span class="tag tag-full">Python 完整</span> 共享同一模块</td>
+          <td><span class="tag tag-matlab">MATLAB 内部</span></td>
+        </tr>
+        <tr><td><strong>多小区干扰</strong></td>
+          <td><span class="tag tag-full">完整 SIR</span> K 小区逐一建模</td>
+          <td><span class="tag tag-full">完整 SIR</span> RT + TDL 补丁回退</td>
+          <td><span class="tag tag-full">逐小区矩阵</span> MATLAB Hf_all_cells → [K-1,T,RB,BS,UE]</td>
+        </tr>
+        <tr><td><strong>信道估计</strong></td>
+          <td><span class="tag tag-full">LS / MMSE</span> Python pipeline</td>
+          <td><span class="tag tag-full">LS / MMSE</span> 共享同一模块</td>
+          <td><span class="tag tag-matlab">MATLAB 估计</span> Python 只读结果</td>
+        </tr>
+        <tr><td><strong>SRS 跳频</strong></td>
+          <td><span class="tag tag-full">完整跳频</span> 3GPP TS 38.211</td>
+          <td><span class="tag tag-full">完整跳频</span> 共享同一模块</td>
+          <td><span class="tag tag-full">RB 计算</span> srs_accumulated_rb_indices()</td>
+        </tr>
+        <tr><td><strong>SSB 波束扫描</strong></td>
+          <td><span class="tag tag-full">完整实现</span> 多波束 + 最优选择</td>
+          <td><span class="tag tag-full">完整实现</span> try-catch 保护</td>
+          <td><span class="tag tag-full">完整实现</span> MATLAB SSB 输出 + 回退公式</td>
+        </tr>
+        <tr><td><strong>DL 预编码</strong></td>
+          <td><span class="tag tag-full">SVD Rank-1</span></td>
+          <td><span class="tag tag-full">SVD Rank-1</span></td>
+          <td><span class="tag tag-full">SVD Rank-1</span></td>
+        </tr>
+        <tr><td><strong>上下行配对</strong></td>
+          <td><span class="tag tag-full">UL+DL 配对</span></td>
+          <td><span class="tag tag-full">UL+DL 配对</span></td>
+          <td><span class="tag tag-full">UL+DL 配对</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Two paradigms -->
+  <div class="g2 fi" style="margin-top:24px;">
+    <div class="c">
+      <h4>&#x1F40D; Python-Native 范式</h4>
+      <p>Internal Sim 和 Sionna RT 共享完整的 Python 信号处理链</p>
+      <ul>
+        <li><code>topology/hex_grid.py</code> 蜂窝组网</li>
+        <li><code>topology/pci_planner.py</code> PCI 分配</li>
+        <li><code>channel_est/pipeline.py</code> LS/MMSE 估计</li>
+        <li><code>ref_signals/srs.py</code> SRS 跳频序列</li>
+        <li><code>phy_sim/ssb_measurement.py</code> SSB 波束扫描</li>
+      </ul>
+      <p style="margin-top:8px;"><strong>区别</strong>：Internal Sim 用 TDL 模型生成信道，Sionna RT 用 GPU 光线追踪（三级回退：零功率重试 → 弱干扰 TDL 补丁 → 全 TDL 回退）</p>
+    </div>
+    <div class="c" style="border-color:var(--accent2);">
+      <h4 style="color:var(--accent2)">&#x1F4BB; MATLAB 委托范式</h4>
+      <p>QuaDRiGa 将信道生成和估计委托给 MATLAB，Python 侧完成后处理</p>
+      <div class="cb" style="font-size:.78rem;">
+<span class="cm">// 工作流</span>
+Python: <span class="fn">生成 JSON 配置</span> (含 SRS/拓扑/天线参数)
+  ↓
+MATLAB: <span class="fn">matlab.exe -batch "main_multi(...)"</span>
+  ↓ 输出 .mat: Hf_serving, Hf_all_cells, SSB, w_dl ...
+Python: <span class="fn">解析 .mat → 转置维度 → SRS RB 计算 → ChannelSample</span>
+      </div>
+      <p style="margin-top:6px; font-size:.84rem;"><strong>Python 侧后处理</strong>：SRS RB 跳频计算、DL 预编码回退（compute_dl_precoding）、Pre-SINR 计算</p>
+      <p style="margin-top:4px; color:var(--accent5); font-size:.84rem;"><strong>仍委托 MATLAB</strong>：信道生成物理、组网拓扑、信道估计</p>
+      <p style="margin-top:4px; font-size:.84rem;"><strong>多级回退</strong>：scipy→h5py 加载、MATLAB SSB→公式推导、MATLAB w_dl→Python SVD</p>
+    </div>
+  </div>
+
+  <!-- 10-step pipeline -->
+  <h4 style="margin-top:32px; margin-bottom:12px;">Internal Sim 完整采样流水线（10 步）</h4>
+  <div class="pipe fi">
+    <div class="n"><h4>1. RNG 种子</h4><p>numpy + torch 全局种子，确保可复现</p></div>
+    <div class="n"><h4>2. TDD 时隙</h4><p>帧 → 子帧 → slot → UL/DL 判定 <code>tdd_config.py</code></p></div>
+    <div class="n"><h4>3. UE 放置</h4><p>ISD 内均匀采样 + 最小距离约束，关联最近基站为 serving cell</p></div>
+    <div class="n"><h4>4. LSP 采样</h4><p>3GPP 38.901 大尺度参数：路损 + 阴影衰落 + K 因子</p></div>
+    <div class="n"><h4>5. K 小区 TDL</h4><p>为每个基站独立生成 TDL-C 信道 <code>[T, RB, BS_ant, UE_ant]</code></p></div>
+    <div class="n"><h4>6. SNR / SIR / SINR</h4><p>信号功率 + 干扰功率 + 噪声功率 → 三个指标</p></div>
+    <div class="n"><h4>7. 信道估计</h4><p>LS / MMSE + 时频插值，SRS 跳频累积 <code>channel_est/</code></p></div>
+    <div class="n"><h4>8. DL 预编码</h4><p>SVD 分解估计信道 → Rank-1 预编码矢量 <code>w_dl</code></p></div>
+    <div class="n"><h4>9. SSB 测量</h4><p>多波束扫描 → per-cell RSRP/RSRQ/SINR + 最优波束 <code>ssb_measurement.py</code></p></div>
+    <div class="n"><h4>10. ChannelSample</h4><p>所有结果封装为 Pydantic 模型，落盘 <code>.pt</code> 文件</p></div>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  3. DATA PROCESSING                                   -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-process">
+<div class="container">
+  <h2 class="sec-title">数据处理流水线</h2>
+  <p class="sec-sub">原始信道矩阵 → ChannelSample 数据契约 → Bridge 特征提取 → 16 Token × 128-D</p>
+
+  <!-- Flow -->
+  <div style="overflow-x:auto" class="fi">
+    <div class="flow-h">
+      <div class="step"><div class="box"><h5>原始信道</h5><div class="d">[T,RB,BS,UE]<br/>complex64</div><div class="shape">h_serving_true/est</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>ChannelSample</h5><div class="d">Pydantic 契约<br/>统一字段定义</div><div class="shape">contract.py</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>Bridge</h5><div class="d">干扰上下文<br/>特征分解</div><div class="shape">bridge.py</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>24 字段 feat_dict</h5><div class="d">SRS/PMI/DFT/PDP<br/>RSRP + 8 gate</div><div class="shape">torch.Tensor</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>FeatureExtractor</h5><div class="d">嵌入 + 归一化<br/>门控质量权重</div><div class="shape">extractor.py</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>Tokens</h5><div class="d">模型输入</div><div class="shape">[B, 16, 128]</div></div></div>
+    </div>
+  </div>
+
+  <!-- ChannelSample -->
+  <h4 style="margin-top:28px;">ChannelSample 数据契约</h4>
+  <p style="color:var(--text-dim); font-size:.9rem; margin-bottom:12px;">所有信道源的统一输出接口，Pydantic BaseModel 保证类型安全</p>
+  <div class="g2 fi">
+    <div class="c">
+      <h4>核心信道矩阵</h4>
+      <ul>
+        <li><code>h_serving_true</code> 理想信道 [T,RB,BS,UE] complex64</li>
+        <li><code>h_serving_est</code> 估计信道 [T,RB,BS,UE] complex64</li>
+        <li><code>h_interferers</code> 干扰信道 [K-1,T,RB,BS,UE]</li>
+        <li><code>w_dl</code> DL 预编码 [RB,BS,rank]</li>
+      </ul>
+      <span class="fp">data/contract.py</span>
+    </div>
+    <div class="c">
+      <h4>无线测量 + 元数据</h4>
+      <ul>
+        <li><code>snr_dB / sir_dB / sinr_dB</code> 链路级指标</li>
+        <li><code>ssb_rsrp_dBm / rsrq / sinr</code> SSB 测量</li>
+        <li><code>ue_position</code> [3] 位置坐标</li>
+        <li><code>source / link / channel_est_mode</code> 元信息</li>
+        <li><code>h_ul_true/est, h_dl_true/est</code> UL/DL 配对</li>
+      </ul>
+      <span class="fp">data/contract.py</span>
+    </div>
+  </div>
+
+  <!-- Token Layout -->
+  <h4 style="margin-top:28px;">16 Token 编排</h4>
+  <p style="color:var(--text-dim); font-size:.9rem; margin-bottom:8px;">Bridge 将 ChannelSample 分解为 16 个语义 token，每个 128 维</p>
+  <div class="fi">
+    <div class="tok-grid">
+      <div class="tok tp1"><span class="i">#0</span>PDP</div>
+      <div class="tok tp2"><span class="i">#1</span>SRS-1</div>
+      <div class="tok tp2"><span class="i">#2</span>SRS-2</div>
+      <div class="tok tp2"><span class="i">#3</span>SRS-3</div>
+      <div class="tok tp2"><span class="i">#4</span>SRS-4</div>
+      <div class="tok tp3"><span class="i">#5</span>PMI-1</div>
+      <div class="tok tp3"><span class="i">#6</span>PMI-2</div>
+      <div class="tok tp3"><span class="i">#7</span>PMI-3</div>
+      <div class="tok tp3"><span class="i">#8</span>PMI-4</div>
+      <div class="tok tp4"><span class="i">#9</span>DFT-1</div>
+      <div class="tok tp4"><span class="i">#10</span>DFT-2</div>
+      <div class="tok tp4"><span class="i">#11</span>DFT-3</div>
+      <div class="tok tp4"><span class="i">#12</span>DFT-4</div>
+      <div class="tok tp5"><span class="i">#13</span>RSRP-SRS</div>
+      <div class="tok tp5"><span class="i">#14</span>RSRP-CB</div>
+      <div class="tok tp5"><span class="i">#15</span>Cell-RSRP</div>
+    </div>
+    <div style="font-size:.82rem; color:var(--text-dim); margin-top:6px;">
+      <span style="color:var(--accent);">&#x25CF;</span> PDP 功率时延 &nbsp;
+      <span style="color:var(--accent2);">&#x25CF;</span> SRS 空域特征向量(IIR 平滑) &nbsp;
+      <span style="color:var(--accent3);">&#x25CF;</span> PMI 预编码 (3GPP Type-I) &nbsp;
+      <span style="color:var(--accent5);">&#x25CF;</span> DFT 波束能量 &nbsp;
+      <span style="color:var(--accent4);">&#x25CF;</span> RSRP 功率 &nbsp;
+    </div>
+  </div>
+
+  <!-- Bridge detail -->
+  <div class="g2 fi" style="margin-top:20px;">
+    <div class="c">
+      <h4>Bridge 核心步骤</h4>
+      <ol style="padding-left:16px;">
+        <li>计算干扰上下文（SIR, 协方差特征分解, MUSIC DoA）</li>
+        <li>PDP：UL 信道功率时延谱 → 64 维</li>
+        <li>SRS：空域协方差 R_hh 的 top-4 特征向量（IIR 时间平滑）</li>
+        <li>PMI：3GPP 38.214 Type-I DFT 码本搜索 → 4 个波束矢量</li>
+        <li>DFT：UL 信道 top-4 能量 DFT 波束</li>
+        <li>RSRP：per-antenna + beam-domain + per-cell 三种粒度</li>
+        <li>8 个 gate 标量：SRS 奇异值权重、SINR、CQI</li>
+      </ol>
+      <span class="fp">data/bridge.py → sample_to_features()</span>
+    </div>
+    <div class="c">
+      <h4>FeatureExtractor (nn.Module)</h4>
+      <ul>
+        <li><strong>输入</strong>：24 字段 feat_dict (torch.Tensor)</li>
+        <li><strong>归一化</strong>：ProtocolNormalizer → [-1, 1] 区间</li>
+        <li><strong>嵌入</strong>：complex → 2×real 交织，real → 线性投影</li>
+        <li><strong>门控</strong>：SINR + 能量 + CQI 三重质量门</li>
+        <li><strong>输出</strong>：tokens [B, 16, 128] + token_mask [B, 16]</li>
+      </ul>
+      <p style="margin-top:8px;">归一化基于 <code>PROTOCOL_SPEC</code> 中的 3GPP 物理范围（dB/linear/discrete）</p>
+      <span class="fp">features/extractor.py + normalizer.py</span>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  4. UNIFIED MANAGEMENT                                -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-manage">
+<div class="container">
+  <h2 class="sec-title">统一数据管理</h2>
+  <p class="sec-sub">Manifest 统一索引 + Web 平台管理 + PyTorch Dataset 按需加载</p>
+
+  <div class="g3 fi">
+    <div class="c">
+      <h4>&#x1F4CB; Manifest</h4>
+      <p>Parquet 格式的样本索引，单一事实源</p>
+      <ul>
+        <li>23 列：uuid, source, link, snr/sir/sinr, 位置, split, path, status ...</li>
+        <li>幂等追加（UUID 去重）</li>
+        <li>原子写入（tmp → rename）</li>
+        <li>Split 策略：random / by_position / by_beam</li>
+      </ul>
+      <span class="fp">data/manifest.py</span>
+    </div>
+    <div class="c">
+      <h4>&#x1F4BE; ChannelDataset</h4>
+      <p>PyTorch Dataset 包装，按需惰性加载</p>
+      <ul>
+        <li>按 split 过滤（train/val/test）</li>
+        <li>按 source 过滤（多源混合）</li>
+        <li>按 link 过滤（UL/DL/both）</li>
+        <li>自定义 transform 链</li>
+        <li>通过 <code>ChannelSample.from_pt_file()</code> 延迟加载</li>
+      </ul>
+      <span class="fp">data/dataset.py</span>
+    </div>
+    <div class="c">
+      <h4>&#x1F310; Web 管理平台</h4>
+      <p>FastAPI + React SPA 全栈管理</p>
+      <ul>
+        <li>数据集概览：per-source 统计（数量、SNR 分布）</li>
+        <li>样本浏览：筛选、排序、分页查看</li>
+        <li>任务管理：采集 / 导出 / 评估任务队列</li>
+        <li>模型仓库：模型列表 + 元信息查看</li>
+        <li>自动同步：manifest ↔ SQLite DB</li>
+      </ul>
+      <span class="fp">platform/backend/ + platform/frontend/</span>
+    </div>
+  </div>
+
+  <div class="c fi" style="margin-top:18px;">
+    <h4>Web 平台技术栈</h4>
+    <div class="g3" style="margin-top:12px;">
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent);">后端</h4>
+        <ul>
+          <li>FastAPI + SQLAlchemy ORM</li>
+          <li>SQLite（开发）/ PostgreSQL（生产）</li>
+          <li>Dramatiq + Redis 任务队列</li>
+          <li>Alembic 数据库迁移</li>
+        </ul>
+      </div>
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent);">前端</h4>
+        <ul>
+          <li>React 18 + TypeScript</li>
+          <li>SPA 路由，静态资源托管</li>
+          <li>实时任务进度展示</li>
+        </ul>
+      </div>
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent);">Worker</h4>
+        <ul>
+          <li>Dramatiq Actor 分发任务</li>
+          <li>Hydra 子进程执行</li>
+          <li>stdout 流式解析进度</li>
+          <li>取消标志 + 超时保护</li>
+        </ul>
+      </div>
+    </div>
+    <span class="fp">platform/backend/main.py · platform/worker/cli.py</span>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  5. DATA EXPORT                                       -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-export">
+<div class="container">
+  <h2 class="sec-title">数据集发布（导出）</h2>
+  <p class="sec-sub">将平台管理的数据打包为标准格式，发布到公司模型训练平台</p>
+
+  <!-- Export flow -->
+  <div style="overflow-x:auto" class="fi">
+    <div class="flow-h">
+      <div class="step"><div class="box"><h5>筛选条件</h5><div class="d">source / link<br/>SNR 范围</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>Split 分配</h5><div class="d">train / val / test<br/>按策略划分</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>原始数据导出</h5><div class="d">ChannelSample .pt<br/>相对路径 manifest</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>特征预提取</h5><div class="d">Bridge → shard .pt<br/>[N,16,128] tokens</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>模型定义附带</h5><div class="d">ChannelMAE 源码<br/>config + 参考脚本</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box" style="border-color:var(--accent3);"><h5 style="color:var(--accent3);">导出包</h5><div class="d">dataset_bundle/</div><div class="shape">metadata.json</div></div></div>
+    </div>
+  </div>
+
+  <!-- Export bundle structure -->
+  <div class="g2 fi" style="margin-top:24px;">
+    <div class="c" style="border-color:var(--accent3);">
+      <h4 style="color:var(--accent3);">&#x1F4E6; 导出包结构</h4>
+      <div class="ftree">
+<span class="dir">dataset_bundle/</span>
+├── <span class="req">metadata.json</span>        <span class="desc"># 版本, token_layout, protocol_spec, 统计摘要</span>
+├── <span class="req">manifest.parquet</span>     <span class="desc"># 样本元数据 + split 标签</span>
+├── <span class="file">splits.json</span>          <span class="desc"># {train:[uuids], val:[uuids], test:[uuids]}</span>
+│
+├── <span class="dir">raw/</span>                  <span class="desc"># 原始信道数据</span>
+│   └── <span class="file">{sample_id}.pt</span>   <span class="desc"># ChannelSample dict (complex64 矩阵)</span>
+│
+├── <span class="dir">features/</span>             <span class="desc"># 预提取 token（训练直接用）</span>
+│   ├── <span class="file">shard-000000.pt</span>  <span class="desc"># {tokens:[N,16,128], masks:[N,16], snr:[N]}</span>
+│   └── <span class="file">shard-000001.pt</span>
+│
+├── <span class="dir">model_def/</span>            <span class="desc"># 模型定义（训练平台使用）</span>
+│   ├── <span class="file">channel_mae.py</span>   <span class="desc"># ChannelMAE 模型类</span>
+│   ├── <span class="file">adapters.py</span>      <span class="desc"># LatentAdapter</span>
+│   ├── <span class="file">extractor.py</span>     <span class="desc"># FeatureExtractor</span>
+│   ├── <span class="file">normalizer.py</span>    <span class="desc"># ProtocolNormalizer</span>
+│   ├── <span class="file">protocol_spec.py</span> <span class="desc"># 3GPP 参数常量</span>
+│   └── <span class="file">model_config.json</span> <span class="desc"># ChannelMAE 默认构造参数</span>
+│
+└── <span class="dir">training_ref/</span>         <span class="desc"># 训练参考代码</span>
+    ├── <span class="file">losses.py</span>        <span class="desc"># reconstruction + contrastive loss</span>
+    ├── <span class="file">pretrain_example.py</span> <span class="desc"># 训练循环示例</span>
+    └── <span class="file">README.md</span>        <span class="desc"># 训练说明文档</span>
+      </div>
+    </div>
+
+    <div class="c">
+      <h4>导出配置参数</h4>
+      <table class="matrix" style="margin-top:8px;">
+        <thead><tr><th>参数</th><th>说明</th><th>默认值</th></tr></thead>
+        <tbody>
+          <tr><td><code>source_filter</code></td><td>信道源筛选</td><td>全部</td></tr>
+          <tr><td><code>link_filter</code></td><td>UL / DL / both</td><td>both</td></tr>
+          <tr><td><code>split_strategy</code></td><td>划分策略</td><td>random</td></tr>
+          <tr><td><code>val_ratio</code></td><td>验证集比例</td><td>0.1</td></tr>
+          <tr><td><code>test_ratio</code></td><td>测试集比例</td><td>0.1</td></tr>
+          <tr><td><code>include_raw</code></td><td>是否导出原始 .pt</td><td>true</td></tr>
+          <tr><td><code>include_features</code></td><td>是否预提取 token</td><td>true</td></tr>
+          <tr><td><code>include_model_def</code></td><td>是否附带模型定义</td><td>true</td></tr>
+          <tr><td><code>include_training_ref</code></td><td>是否附带训练参考</td><td>true</td></tr>
+        </tbody>
+      </table>
+
+      <h4 style="margin-top:20px;">API 接口</h4>
+      <div class="cb">
+<span class="kw">POST</span> <span class="fn">/api/datasets/export</span>
+{
+  <span class="str">"source_filter"</span>: [<span class="str">"internal_sim"</span>, <span class="str">"sionna_rt"</span>],
+  <span class="str">"split_strategy"</span>: <span class="str">"by_position"</span>,
+  <span class="str">"output_dir"</span>: <span class="str">"/shared/training_data/exp_001"</span>
+}
+<span class="cm">// → 202 Accepted, {"job_id": "..."}</span>
+      </div>
+      <span class="fp">platform/backend/routes/export_data.py</span>
+    </div>
+  </div>
+
+  <div class="c fi" style="margin-top:18px;">
+    <h4>两种数据消费方式</h4>
+    <div class="g2" style="margin-top:12px;">
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent3);">方式 A：使用预提取特征（推荐）</h4>
+        <p style="color:var(--text-dim); font-size:.86rem;">训练平台直接加载 <code>features/shard-*.pt</code>，tokens 已就绪，无需安装 msg-embedding 包。每个 shard 包含 ~1000 个样本的 <code>[N,16,128]</code> 张量。</p>
+      </div>
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent5);">方式 B：使用原始数据</h4>
+        <p style="color:var(--text-dim); font-size:.86rem;">训练平台安装 <code>msg-embedding</code> 包（或使用 <code>model_def/</code> 下的独立文件），调用 <code>ChannelDataset</code> + <code>bridge.sample_to_features()</code> 自行提取。灵活度更高。</p>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  6. MODEL IMPORT                                      -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-import">
+<div class="container">
+  <h2 class="sec-title">模型结构 &amp; 权重导入</h2>
+  <p class="sec-sub">从公司训练平台导入训练好的模型，验证兼容性后注册到模型仓库</p>
+
+  <div style="overflow-x:auto" class="fi">
+    <div class="flow-h">
+      <div class="step"><div class="box" style="border-color:var(--accent5);"><h5 style="color:var(--accent5);">训练平台产出</h5><div class="d">checkpoint.pth<br/>model_config.json</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>导入验证</h5><div class="d">实例化 ChannelMAE<br/>load_state_dict<br/>dummy forward</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>注册到仓库</h5><div class="d">artifacts/{run_id}/<br/>DB 记录</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box"><h5>可选：自动导出</h5><div class="d">ONNX / TorchScript<br/>encoder-only</div></div></div>
+      <div class="arr">→</div>
+      <div class="step"><div class="box" style="border-color:var(--accent3);"><h5 style="color:var(--accent3);">就绪</h5><div class="d">可推理<br/>可评估</div></div></div>
+    </div>
+  </div>
+
+  <div class="g2 fi" style="margin-top:24px;">
+    <div class="c" style="border-color:var(--accent5);">
+      <h4 style="color:var(--accent5);">&#x1F4E5; 导入包格式</h4>
+      <div class="ftree">
+<span class="dir">import_bundle/</span>
+├── <span class="req">checkpoint.pth</span>      <span class="desc"># 必须：state_dict 或 {"model": sd, ...}</span>
+├── <span class="opt">model_config.json</span>   <span class="desc"># 推荐：ChannelMAE 构造参数</span>
+├── <span class="opt">metadata.json</span>       <span class="desc"># 可选：训练元信息 (epochs, loss, ...)</span>
+├── <span class="opt">encoder.onnx</span>        <span class="desc"># 可选：已导出的 ONNX encoder</span>
+└── <span class="opt">encoder.ts</span>          <span class="desc"># 可选：已导出的 TorchScript encoder</span>
+      </div>
+      <p style="margin-top:8px; font-size:.84rem;"><span style="color:var(--accent3)">&#x25CF; 必须</span> &nbsp; <span style="color:var(--accent5);">&#x25CF; 推荐/可选</span></p>
+
+      <h4 style="margin-top:16px;">model_config.json 示例</h4>
+      <div class="cb">
+{
+  <span class="str">"encoder_layers"</span>: <span class="num">4</span>,
+  <span class="str">"decoder_layers"</span>: <span class="num">2</span>,
+  <span class="str">"embed_dim"</span>: <span class="num">128</span>,
+  <span class="str">"num_heads"</span>: <span class="num">8</span>,
+  <span class="str">"latent_dim"</span>: <span class="num">16</span>,
+  <span class="str">"use_snr_condition"</span>: <span class="kw">true</span>,
+  <span class="str">"dropout"</span>: <span class="num">0.1</span>
+}
+      </div>
+    </div>
+
+    <div class="c">
+      <h4>&#x2705; 导入验证流程</h4>
+      <div class="pipe" style="margin-top:12px;">
+        <div class="n"><h4>1. 文件完整性</h4><p>检查 checkpoint.pth 存在且可加载</p></div>
+        <div class="n"><h4>2. 配置解析</h4><p>读取 model_config.json（无则使用平台默认配置）</p></div>
+        <div class="n"><h4>3. 模型实例化</h4><p><code>ChannelMAE(config)</code> 构造模型</p></div>
+        <div class="n"><h4>4. 权重加载</h4><p><code>load_state_dict(ckpt)</code> 检查 key 匹配</p></div>
+        <div class="n"><h4>5. 前向验证</h4><p>dummy tokens [1,16,128] → forward → 检查输出形状</p></div>
+        <div class="n"><h4>6. 注册入库</h4><p>复制文件到 <code>artifacts/{run_id}/</code>，写入 DB 记录</p></div>
+      </div>
+      <span class="fp">inference/model_import.py</span>
+    </div>
+  </div>
+
+  <div class="c fi" style="margin-top:18px;">
+    <h4>模型仓库 (Model Registry)</h4>
+    <div class="g2" style="margin-top:12px;">
+      <div>
+        <h4 style="font-size:.88rem;">ORM 字段</h4>
+        <table class="matrix" style="font-size:.82rem;">
+          <tbody>
+            <tr><td><code>id</code></td><td>主键</td></tr>
+            <tr><td><code>run_id</code></td><td>关联 Run（外部导入生成 synthetic run）</td></tr>
+            <tr><td><code>format</code></td><td>pt / onnx / torchscript</td></tr>
+            <tr><td><code>origin</code></td><td><span class="tag tag-new">新</span> internal / external</td></tr>
+            <tr><td><code>model_config_json</code></td><td><span class="tag tag-new">新</span> ChannelMAE 构造参数</td></tr>
+            <tr><td><code>description</code></td><td><span class="tag tag-new">新</span> 模型描述</td></tr>
+            <tr><td><code>training_meta_json</code></td><td><span class="tag tag-new">新</span> 训练元信息</td></tr>
+            <tr><td><code>path</code></td><td>artifacts 路径</td></tr>
+            <tr><td><code>size_bytes</code></td><td>文件大小</td></tr>
+            <tr><td><code>created_at</code></td><td>导入时间</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h4 style="font-size:.88rem;">API 接口</h4>
+        <div class="cb" style="font-size:.78rem;">
+<span class="kw">POST</span> <span class="fn">/api/models/import</span>
+{ <span class="str">"bundle_dir"</span>: <span class="str">"/path/to/import_bundle"</span> }
+<span class="cm">→ 201 {run_id, model_id, validation}</span>
+
+<span class="kw">GET</span>  <span class="fn">/api/models</span>
+<span class="cm">→ 200 {total, items: [...]}</span>
+
+<span class="kw">POST</span> <span class="fn">/api/models/{id}/validate</span>
+<span class="cm">→ 200 {valid, param_count, errors}</span>
+
+<span class="kw">GET</span>  <span class="fn">/api/models/{id}/metadata</span>
+<span class="cm">→ 200 {config, training_info, ...}</span>
+
+<span class="kw">POST</span> <span class="fn">/api/models/{id}/eval</span>
+<span class="cm">→ 202 {job_id} 发起评估任务</span>
+        </div>
+        <span class="fp">platform/backend/routes/model_import.py</span>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  7. MODEL ARCHITECTURE                                -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-model">
+<div class="container">
+  <h2 class="sec-title">模型架构 (ChannelMAE)</h2>
+  <p class="sec-sub">平台持有模型定义，用于模型导入验证、推理和评估；同时随数据集导出供训练平台使用</p>
+
+  <div class="arch fi">
+    <div class="arch-row">
+      <div class="ab t-in">Input Proj<br/><small>16×128 → 16×D</small></div>
+      <span class="aarr">→</span>
+      <div class="ab t-in">+ Pos Emb<br/><small>可学习位置</small></div>
+      <span class="aarr">→</span>
+      <div class="ab t-in">SNR Cond<br/><small>条件注入</small></div>
+      <span class="aarr">→</span>
+      <div class="ab t-enc">Encoder ×4<br/><small>TransformerEncoder</small></div>
+      <span class="aarr">→</span>
+      <div class="ab t-bn">MLP 瓶颈<br/><small>128→512→128</small></div>
+    </div>
+    <div class="arch-lbl">编码路径 — 推理时仅需此路径产出 16-D latent</div>
+    <div class="arch-row">
+      <div class="ab t-bn">Energy Pool<br/><small>softmax 加权</small></div>
+      <span class="aarr">→</span>
+      <div class="ab t-bn">Latent Proj<br/><small>128→64→16</small></div>
+      <span class="aarr">→</span>
+      <div class="ab t-out">L2 Norm<br/><small>16-D 嵌入</small></div>
+      <span class="aarr" style="visibility:hidden;">→</span>
+      <div class="ab t-dec" style="opacity:.5;">Decoder ×2<br/><small>仅训练/评估用</small></div>
+      <span class="aarr" style="opacity:.5;">→</span>
+      <div class="ab t-dec" style="opacity:.5;">Recon Heads<br/><small>per-feature 重建</small></div>
+    </div>
+    <div class="arch-lbl">投影 + 解码路径 — 解码器在推理时不使用，仅在评估重建 NMSE 时激活</div>
+  </div>
+
+  <div class="g3 fi" style="margin-top:24px;">
+    <div class="c">
+      <h4>编码器</h4>
+      <ul>
+        <li>4 层 TransformerEncoder</li>
+        <li>8 头自注意力 + FFN</li>
+        <li>可选 SNR 条件注入</li>
+        <li>扰动感知编码（高斯/平移噪声）</li>
+      </ul>
+    </div>
+    <div class="c">
+      <h4>Latent 投影</h4>
+      <ul>
+        <li>Energy-weighted pooling（MLP 范数 softmax）</li>
+        <li>两层 MLP：128 → 64 → 16</li>
+        <li>L2 归一化到单位超球面</li>
+        <li>LatentAdapter（~1.5K 参数，微调用）</li>
+      </ul>
+    </div>
+    <div class="c">
+      <h4>解码器（评估用）</h4>
+      <ul>
+        <li>2 层 TransformerDecoder</li>
+        <li>Per-feature 重建头</li>
+        <li>推理时不激活</li>
+        <li>评估重建 NMSE 时使用</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="c fi" style="margin-top:18px;">
+    <h4>模型在平台中的三种用途</h4>
+    <div class="g3" style="margin-top:12px;">
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent);">1. 导入验证</h4>
+        <p style="color:var(--text-dim); font-size:.84rem;"><code>ChannelMAE(config)</code> 实例化 → <code>load_state_dict(ckpt)</code> → dummy forward 检查输出形状</p>
+      </div>
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent2);">2. 推理</h4>
+        <p style="color:var(--text-dim); font-size:.84rem;"><code>EncoderWrapper</code> 封装编码路径 → tokens [B,16,128] → latent [B,16] / 导出 ONNX</p>
+      </div>
+      <div>
+        <h4 style="font-size:.88rem; color:var(--accent3);">3. 评估</h4>
+        <p style="color:var(--text-dim); font-size:.84rem;">完整 forward (encode+decode) → 重建 NMSE；仅 encode → latent 几何指标 (TW/CT/KNN)</p>
+      </div>
+    </div>
+    <span class="fp">models/channel_mae.py · models/adapters.py</span>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  8. INFERENCE                                         -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-infer">
+<div class="container">
+  <h2 class="sec-title">推理</h2>
+  <p class="sec-sub">对导入的模型运行推理，产出 latent 嵌入向量，支持 ONNX / TorchScript 导出部署</p>
+
+  <div class="g2 fi">
+    <div class="c">
+      <h4>&#x1F680; EncoderWrapper</h4>
+      <p>将 ChannelMAE 编码路径封装为确定性推理模块</p>
+      <ul>
+        <li><strong>输入</strong>：tokens [B,16,128] + token_mask [B,16]</li>
+        <li><strong>处理</strong>：Encoder → MLP → mask-aware energy pooling → latent projection</li>
+        <li><strong>输出</strong>：L2 归一化 latent [B,16]</li>
+        <li>支持 <code>model_config</code> 参数加载非默认架构</li>
+      </ul>
+      <span class="fp">inference/wrapper.py</span>
+    </div>
+    <div class="c">
+      <h4>&#x26A1; BatchInferenceRunner</h4>
+      <p>高吞吐批量推理驱动</p>
+      <ul>
+        <li><code>embed_feat_dict(feat)</code> 单样本特征 → embedding</li>
+        <li><code>embed_tokens(tokens, mask)</code> 预提取 token → embedding</li>
+        <li><code>infer_dataset(dataset, batch_size)</code> 数据集级批量推理</li>
+        <li>支持半精度 (FP16) 加速</li>
+      </ul>
+      <span class="fp">inference/batch.py</span>
+    </div>
+  </div>
+
+  <div class="g2 fi" style="margin-top:18px;">
+    <div class="c">
+      <h4>ONNX 导出</h4>
+      <ul>
+        <li>Opset 17，dynamic batch axis</li>
+        <li>输入：tokens [batch,16,128] + mask [batch,16]</li>
+        <li>输出：latent [batch,16] float32</li>
+        <li>自动验证：torch vs ONNX 输出 atol &lt; 1e-4</li>
+      </ul>
+      <span class="fp">inference/export.py → export_onnx()</span>
+    </div>
+    <div class="c">
+      <h4>TorchScript 导出</h4>
+      <ul>
+        <li>Trace 模式（默认）或 Script 模式</li>
+        <li>可直接在 C++ LibTorch 中加载</li>
+        <li>不依赖 Python 运行时</li>
+      </ul>
+      <span class="fp">inference/export.py → export_torchscript()</span>
+    </div>
+  </div>
+
+  <div class="c fi" style="margin-top:18px;">
+    <h4>部署元数据 (metadata.json)</h4>
+    <div class="cb">
+{
+  <span class="str">"model_name"</span>: <span class="str">"msg-embedding"</span>,
+  <span class="str">"version"</span>: <span class="str">"a1b2c3d"</span>,
+  <span class="str">"input_spec"</span>: {
+    <span class="str">"tokens"</span>: { <span class="str">"shape"</span>: [<span class="str">"batch"</span>, <span class="num">16</span>, <span class="num">128</span>], <span class="str">"dtype"</span>: <span class="str">"float32"</span> },
+    <span class="str">"token_mask"</span>: { <span class="str">"shape"</span>: [<span class="str">"batch"</span>, <span class="num">16</span>], <span class="str">"dtype"</span>: <span class="str">"bool"</span> }
+  },
+  <span class="str">"output_spec"</span>: { <span class="str">"shape"</span>: [<span class="str">"batch"</span>, <span class="num">16</span>], <span class="str">"dtype"</span>: <span class="str">"float32"</span> },
+  <span class="str">"token_layout"</span>: { <span class="num">0</span>: <span class="str">"pdp"</span>, <span class="num">1</span>: <span class="str">"srs1"</span>, <span class="cm">...</span>, <span class="num">15</span>: <span class="str">"cell_rsrp"</span> },
+  <span class="str">"normalization"</span>: { <span class="str">"protocol_spec"</span>: { <span class="cm">/* 3GPP 物理范围 */</span> } }
+}
+    </div>
+    <span class="fp">inference/export.py → write_metadata()</span>
+  </div>
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  9. EVALUATION                                        -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section id="s-eval">
+<div class="container">
+  <h2 class="sec-title">性能评估</h2>
+  <p class="sec-sub">对导入的模型进行全面评估：隐空间几何指标 + 重建质量 + 可视化报告</p>
+
+  <!-- Eval flow -->
+  <div class="c fi">
+    <h4>评估流程</h4>
+    <div style="overflow-x:auto; margin-top:12px;">
+      <div class="flow-h">
+        <div class="step"><div class="box"><h5>加载模型</h5><div class="d">ChannelMAE(config)<br/>load_state_dict</div></div></div>
+        <div class="arr">→</div>
+        <div class="step"><div class="box"><h5>测试集推理</h5><div class="d">encode → latent<br/>[B, 16] 嵌入</div></div></div>
+        <div class="arr">→</div>
+        <div class="step"><div class="box"><h5>几何指标</h5><div class="d">TW / CT / KNN<br/>Kendall &#x3C4;</div></div></div>
+        <div class="arr">→</div>
+        <div class="step"><div class="box"><h5>重建 NMSE</h5><div class="d">full forward<br/>per-feature MSE</div></div></div>
+        <div class="arr">→</div>
+        <div class="step"><div class="box"><h5>结果输出</h5><div class="d">metrics.json<br/>embeddings.parquet</div></div></div>
+        <div class="arr">→</div>
+        <div class="step"><div class="box"><h5>可视化报告</h5><div class="d">UMAP 散点<br/>HTML 报告</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="g2 fi" style="margin-top:24px;">
+    <div class="c">
+      <h4>&#x1F4D0; 隐空间几何指标</h4>
+      <p>评估 latent embedding 是否保持了物理空间的邻近关系</p>
+      <table class="matrix" style="margin-top:8px;">
+        <thead><tr><th>指标</th><th>含义</th><th>理想值</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Trustworthiness</strong></td><td>隐空间近邻是否在物理空间也近邻</td><td>→ 1.0</td></tr>
+          <tr><td><strong>Continuity</strong></td><td>物理空间近邻是否在隐空间也近邻</td><td>→ 1.0</td></tr>
+          <tr><td><strong>KNN Consistency</strong></td><td>k-NN 的物理属性一致性</td><td>→ 1.0</td></tr>
+          <tr><td><strong>Kendall &#x3C4;</strong></td><td>隐空间 vs 物理空间距离排序相关</td><td>→ 1.0</td></tr>
+          <tr><td><strong>Cosine Separation</strong></td><td>同 UE / 异 UE 嵌入余弦距离差异</td><td>margin > 0</td></tr>
+        </tbody>
+      </table>
+      <span class="fp">eval/channel_charting.py</span>
+    </div>
+    <div class="c">
+      <h4>&#x1F4CF; 重建质量指标</h4>
+      <p>通过完整 encode→decode 路径评估信道重建精度</p>
+      <table class="matrix" style="margin-top:8px;">
+        <thead><tr><th>指标</th><th>特征</th></tr></thead>
+        <tbody>
+          <tr><td>NMSE (dB)</td><td>SRS 1-4（complex，空域特征向量）</td></tr>
+          <tr><td>NMSE (dB)</td><td>PMI 1-4（complex，预编码矢量）</td></tr>
+          <tr><td>NMSE (dB)</td><td>DFT 1-4（complex，波束能量）</td></tr>
+          <tr><td>NMSE (dB)</td><td>RSRP（real，功率谱）</td></tr>
+          <tr><td>NMSE (dB)</td><td>PDP（real，功率时延谱）</td></tr>
+          <tr><td>Total NMSE</td><td>加权汇总</td></tr>
+        </tbody>
+      </table>
+      <span class="fp">eval/prediction.py</span>
+    </div>
+  </div>
+
+  <div class="g3 fi" style="margin-top:18px;">
+    <div class="c">
+      <h4>&#x1F30C; 隐空间可视化</h4>
+      <p>16-D → 2-D 降维投影：UMAP（首选）/ t-SNE / PCA 回退<br/>按 SNR / SIR / source / link 着色</p>
+      <span class="fp">viz/latent.py</span>
+    </div>
+    <div class="c">
+      <h4>&#x1F4C4; 报告生成</h4>
+      <p>HTML 报告：指标摘要 + UMAP 散点 + per-feature NMSE 柱状图 + 余弦分布</p>
+      <span class="fp">report/generator.py</span>
+    </div>
+    <div class="c">
+      <h4>&#x1F4CA; 多模型对比</h4>
+      <p>MultiRunComparator：跨多个 checkpoint 对比指标变化趋势</p>
+      <span class="fp">report/compare.py</span>
+    </div>
+  </div>
+
+  <!-- Eval API -->
+  <div class="c fi" style="margin-top:18px;">
+    <h4>评估 API</h4>
+    <div class="cb">
+<span class="cm">// 对导入的模型发起评估</span>
+<span class="kw">POST</span> <span class="fn">/api/models/{model_id}/eval</span>
+{
+  <span class="str">"dataset_source"</span>: <span class="str">"internal_sim"</span>,
+  <span class="str">"dataset_split"</span>: <span class="str">"test"</span>,
+  <span class="str">"metrics"</span>: [<span class="str">"nmse"</span>, <span class="str">"trustworthiness"</span>, <span class="str">"continuity"</span>, <span class="str">"knn_consistency"</span>]
+}
+<span class="cm">→ 202 Accepted, {"job_id": "..."}</span>
+
+<span class="cm">// 评估完成后查看结果</span>
+<span class="kw">GET</span> <span class="fn">/api/runs/{run_id}</span>
+<span class="cm">→ 200 {metrics: {nmse_dB: -18.3, tw: 0.92, ct: 0.89, ...}}</span>
+    </div>
+    <span class="fp">platform/backend/routes/model_import.py · eval/runner.py</span>
+  </div>
+
+  <!-- Output artifacts -->
+  <div class="c fi" style="margin-top:18px;">
+    <h4>评估输出产物</h4>
+    <div class="ftree">
+<span class="dir">artifacts/{run_id}/</span>
+├── <span class="file">metrics.json</span>          <span class="desc"># 所有指标数值 (NMSE, TW, CT, KNN, Kendall, cosine)</span>
+├── <span class="file">embeddings.parquet</span>    <span class="desc"># latent [N,16] + sample_id + ue_position</span>
+├── <span class="file">eval_config.yaml</span>      <span class="desc"># 评估使用的配置</span>
+└── <span class="dir">report/</span>
+    ├── <span class="file">report.html</span>       <span class="desc"># 可视化 HTML 报告</span>
+    ├── <span class="file">umap_scatter.png</span>  <span class="desc"># UMAP 2D 投影散点图</span>
+    └── <span class="file">nmse_per_feature.png</span> <span class="desc"># per-feature NMSE 柱状图</span>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ═══════ FOOTER ═══════ -->
+<footer>
+  <p>ChannelHub · 信道数据工场 · 数据管理 &amp; 模型验证平台 · 生成于 2026-04-29</p>
+  <p style="margin-top:4px; opacity:.6;">src/msg_embedding/ · platform/ · FastAPI + React · PyTorch · 5G NR Channel Representation Learning</p>
+</footer>
+
+<!-- ═══════ JS ═══════ -->
+<script>
+function stab(btn, id) {
+  const tabs = btn.closest('.tabs');
+  tabs.querySelectorAll('.tbtn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  let sibling = tabs.nextElementSibling;
+  while (sibling && sibling.classList.contains('tp')) {
+    sibling.classList.remove('on');
+    sibling = sibling.nextElementSibling;
+  }
+  document.getElementById('t-' + id).classList.add('on');
+}
+
+const secs = document.querySelectorAll('section[id]');
+const navs = document.querySelectorAll('.toc a');
+window.addEventListener('scroll', () => {
+  let cur = '';
+  secs.forEach(s => { if (scrollY >= s.offsetTop - 100) cur = s.id; });
+  navs.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + cur));
+});
+
+const obs = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) e.target.classList.add('vis'); }), { threshold: 0.08 });
+document.querySelectorAll('.fi').forEach(el => obs.observe(el));
+</script>
+</body>
+</html>

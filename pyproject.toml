@@ -31,6 +31,7 @@ platform = [
     "uvicorn[standard]>=0.27",
     "sqlalchemy>=2.0",
     "alembic>=1.13",
+    "python-multipart>=0.0.9",
 ]
 dev = [
     "ruff>=0.6",
@@ -50,11 +51,11 @@ sionna = [
 ]
 
 [project.scripts]
-msg-train = "scripts.run_train:main"
 msg-eval = "scripts.run_eval:main"
 msg-infer = "scripts.run_infer:main"
 msg-export = "scripts.run_export:main"
 msg-simulate = "scripts.run_simulate:main"
+msg-dataset-export = "scripts.run_dataset_export:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

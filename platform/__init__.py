@@ -1,4 +1,4 @@
-"""MSG-Embedding platform namespace package (backend + worker + frontend).
+"""ChannelHub platform namespace package (backend + worker + frontend).
 
 Because this package shadows the stdlib ``platform`` module, we delegate
 attribute access that is not defined here to the real stdlib module.

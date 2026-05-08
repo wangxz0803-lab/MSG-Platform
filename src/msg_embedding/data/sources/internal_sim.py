@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -89,11 +90,53 @@ def _pathloss_uma_nlos(d_3d: float, fc_ghz: float, h_bs: float, h_ut: float) -> 
     return pl, 6.0  # σ_SF = 6 dB
 
 
+def _pathloss_uma_los(d_3d: float, fc_ghz: float, h_bs: float, h_ut: float) -> tuple[float, float]:
+    """38.901 UMa LOS: Table 7.4.1-1 with breakpoint distance."""
+    d_3d = max(d_3d, 1.0)
+    h_e = 1.0  # effective environment height (UMa)
+    h_bs_eff = h_bs - h_e
+    h_ut_eff = max(h_ut - h_e, 0.5)
+    c = 3.0e8
+    d_bp = 4.0 * h_bs_eff * h_ut_eff * fc_ghz * 1e9 / c
+    d_2d = math.sqrt(max(d_3d ** 2 - (h_bs - h_ut) ** 2, 1.0))
+    if d_2d <= d_bp:
+        pl = 28.0 + 22.0 * math.log10(d_3d) + 20.0 * math.log10(fc_ghz)
+    else:
+        pl = (
+            28.0
+            + 40.0 * math.log10(d_3d)
+            + 20.0 * math.log10(fc_ghz)
+            - 9.0 * math.log10(d_bp ** 2 + (h_bs - h_ut) ** 2)
+        )
+    return pl, 4.0  # σ_SF = 4 dB
+
+
 def _pathloss_umi_nlos(d_3d: float, fc_ghz: float, h_bs: float, h_ut: float) -> tuple[float, float]:
     """38.901 UMi Street Canyon NLOS (simplified)."""
     d_3d = max(d_3d, 1.0)
     pl = 22.4 + 35.3 * math.log10(d_3d) + 21.3 * math.log10(fc_ghz) - 0.3 * (h_ut - 1.5)
     return pl, 7.82
+
+
+def _pathloss_umi_los(d_3d: float, fc_ghz: float, h_bs: float, h_ut: float) -> tuple[float, float]:
+    """38.901 UMi Street Canyon LOS: Table 7.4.1-1 with breakpoint distance."""
+    d_3d = max(d_3d, 1.0)
+    h_e = 1.0
+    h_bs_eff = h_bs - h_e
+    h_ut_eff = max(h_ut - h_e, 0.5)
+    c = 3.0e8
+    d_bp = 4.0 * h_bs_eff * h_ut_eff * fc_ghz * 1e9 / c
+    d_2d = math.sqrt(max(d_3d ** 2 - (h_bs - h_ut) ** 2, 1.0))
+    if d_2d <= d_bp:
+        pl = 32.4 + 21.0 * math.log10(d_3d) + 20.0 * math.log10(fc_ghz)
+    else:
+        pl = (
+            32.4
+            + 40.0 * math.log10(d_3d)
+            + 20.0 * math.log10(fc_ghz)
+            - 9.5 * math.log10(d_bp ** 2 + (h_bs - h_ut) ** 2)
+        )
+    return pl, 4.0  # σ_SF = 4 dB
 
 
 def _pathloss_inf(d_3d: float, fc_ghz: float, h_bs: float, h_ut: float) -> tuple[float, float]:
@@ -105,8 +148,16 @@ def _pathloss_inf(d_3d: float, fc_ghz: float, h_bs: float, h_ut: float) -> tuple
 
 _PATHLOSS_MODELS = {
     "UMa_NLOS": _pathloss_uma_nlos,
+    "UMa_LOS": _pathloss_uma_los,
     "UMi_NLOS": _pathloss_umi_nlos,
+    "UMi_LOS": _pathloss_umi_los,
     "InF": _pathloss_inf,
+}
+
+_LOS_SCENARIO_MAP = {
+    "UMa_NLOS": "UMa_LOS",
+    "UMi_NLOS": "UMi_LOS",
+    "InF": "InF",
 }
 
 
@@ -173,6 +224,87 @@ _SCENARIO_SPATIAL_RHO = {
 
 
 # ---------------------------------------------------------------------------
+# Panel array antenna model (dual-polarization)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PanelConfig:
+    """Antenna panel geometry: N_H x N_V x N_P (horizontal x vertical x polarization)."""
+
+    n_h: int = 1
+    n_v: int = 1
+    n_p: int = 1
+
+    @property
+    def total(self) -> int:
+        return self.n_h * self.n_v * self.n_p
+
+    @property
+    def is_dual_pol(self) -> bool:
+        return self.n_p == 2
+
+
+def _panel_correlation_matrix(
+    panel: PanelConfig,
+    rho_h: float = 0.7,
+    rho_v: float = 0.7,
+    xpd_db: float = 8.0,
+) -> np.ndarray:
+    """Build spatial correlation matrix for a panel array: R = R_H ⊗ R_V ⊗ R_P.
+
+    Returns ``[N_total, N_total]`` real-valued positive-definite matrix.
+    """
+    N_h, N_v, N_p = panel.n_h, panel.n_v, panel.n_p
+    # Horizontal correlation (ULA-style)
+    R_h = np.zeros((N_h, N_h), dtype=np.float64)
+    for i in range(N_h):
+        for j in range(N_h):
+            R_h[i, j] = rho_h ** abs(i - j)
+    # Vertical correlation
+    R_v = np.zeros((N_v, N_v), dtype=np.float64)
+    for i in range(N_v):
+        for j in range(N_v):
+            R_v[i, j] = rho_v ** abs(i - j)
+    # Polarization correlation: cross-pol discrimination
+    if N_p == 2:
+        mu = 10.0 ** (-xpd_db / 10.0)  # XPD linear (power ratio)
+        R_p = np.array([[1.0, mu], [mu, 1.0]], dtype=np.float64)
+    else:
+        R_p = np.ones((1, 1), dtype=np.float64)
+    # Kronecker product: R = R_H ⊗ R_V ⊗ R_P
+    R = np.kron(np.kron(R_h, R_v), R_p)
+    return R
+
+
+def _panel_steering_vector(
+    panel: PanelConfig,
+    azimuth_rad: float,
+    elevation_rad: float = 0.0,
+    d_spacing: float = 0.5,
+) -> np.ndarray:
+    """2D panel array steering vector with dual-polarization.
+
+    Returns ``[N_total]`` complex128.  Antenna ordering: (h, v, p) C-contiguous.
+    """
+    N_h, N_v, N_p = panel.n_h, panel.n_v, panel.n_p
+    # Horizontal phase progression (azimuth)
+    a_h = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_h) * np.sin(azimuth_rad))
+    # Vertical phase progression (elevation)
+    a_v = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_v) * np.cos(elevation_rad))
+    # Spatial component: a_h ⊗ a_v
+    a_spatial = np.kron(a_h, a_v)
+    if N_p == 2:
+        # Dual-pol: both polarizations see the same spatial phase
+        a = np.kron(a_spatial, np.ones(2))
+        # Polarization weighting: ±45° slant → [cos(45°), sin(45°)] ≈ [1/√2, 1/√2]
+        # for simplicity, keep unit amplitude per pol port
+    else:
+        a = a_spatial
+    return a / np.sqrt(panel.total)
+
+
+# ---------------------------------------------------------------------------
 # TDL channel generation
 # ---------------------------------------------------------------------------
 
@@ -194,6 +326,9 @@ def _generate_tdl_channel(
     spatial_corr_rho: float = 0.7,
     fading_seed: int | None = None,
     t_offset_s: float = 0.0,
+    tx_panel: PanelConfig | None = None,
+    rx_panel: PanelConfig | None = None,
+    xpd_db: float = 8.0,
 ) -> np.ndarray:
     """Generate a frequency-domain channel matrix via a tapped-delay-line model.
 
@@ -238,19 +373,26 @@ def _generate_tdl_channel(
         delays_s = np.arange(L, dtype=np.float64) * tap_spacing_s
         los_tap = 0
 
-    # --- Spatial correlation (exponential model: R[i,j] = rho^|i-j|) -----
-    rho = spatial_corr_rho  # per-scenario ULA spatial correlation coefficient
-    R_tx = np.zeros((N_tx, N_tx), dtype=np.float64)
-    for i in range(N_tx):
-        for j in range(N_tx):
-            R_tx[i, j] = rho ** abs(i - j)
-    R_rx = np.zeros((N_rx, N_rx), dtype=np.float64)
-    for i in range(N_rx):
-        for j in range(N_rx):
-            R_rx[i, j] = rho ** abs(i - j)
-    # Cholesky decomposition for coloring: H_corr = R_rx^(1/2) * H_iid * R_tx^(T/2)
-    L_tx = np.linalg.cholesky(R_tx)  # [N_tx, N_tx]
-    L_rx = np.linalg.cholesky(R_rx)  # [N_rx, N_rx]
+    # --- Spatial correlation ------------------------------------------------
+    if tx_panel is not None and tx_panel.total == N_tx:
+        R_tx = _panel_correlation_matrix(tx_panel, rho_h=spatial_corr_rho, rho_v=spatial_corr_rho, xpd_db=xpd_db)
+    else:
+        rho = spatial_corr_rho
+        R_tx = np.zeros((N_tx, N_tx), dtype=np.float64)
+        for i in range(N_tx):
+            for j in range(N_tx):
+                R_tx[i, j] = rho ** abs(i - j)
+    if rx_panel is not None and rx_panel.total == N_rx:
+        R_rx = _panel_correlation_matrix(rx_panel, rho_h=spatial_corr_rho, rho_v=spatial_corr_rho, xpd_db=xpd_db)
+    else:
+        rho = spatial_corr_rho
+        R_rx = np.zeros((N_rx, N_rx), dtype=np.float64)
+        for i in range(N_rx):
+            for j in range(N_rx):
+                R_rx[i, j] = rho ** abs(i - j)
+    # Cholesky decomposition for coloring: H_corr = L_tx * H_iid * L_rx^T
+    L_tx = np.linalg.cholesky(R_tx + 1e-8 * np.eye(N_tx))
+    L_rx = np.linalg.cholesky(R_rx + 1e-8 * np.eye(N_rx))
 
     # --- Per-tap complex gains -------------------------------------------
     # When fading_seed is set, use a deterministic RNG so that tap gains
@@ -279,12 +421,14 @@ def _generate_tdl_channel(
         los_scale = math.sqrt(K / (1.0 + K))
         # LOS component with steering vectors for spatial structure
         d_spacing = 0.5  # antenna spacing in wavelengths
-        a_tx = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_tx) * np.sin(los_aod_rad)) / np.sqrt(
-            N_tx
-        )
-        a_rx = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_rx) * np.sin(los_aoa_rad)) / np.sqrt(
-            N_rx
-        )
+        if tx_panel is not None and tx_panel.total == N_tx:
+            a_tx = _panel_steering_vector(tx_panel, los_aod_rad, d_spacing=d_spacing)
+        else:
+            a_tx = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_tx) * np.sin(los_aod_rad)) / np.sqrt(N_tx)
+        if rx_panel is not None and rx_panel.total == N_rx:
+            a_rx = _panel_steering_vector(rx_panel, los_aoa_rad, d_spacing=d_spacing)
+        else:
+            a_rx = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_rx) * np.sin(los_aoa_rad)) / np.sqrt(N_rx)
         los_matrix = np.outer(a_tx, a_rx.conj())  # [N_tx, N_rx]
         h_taps[los_tap] = (
             h_taps[los_tap] * nlos_scale + los_scale * pdp_sqrt[los_tap] * los_matrix[None, :, :]
@@ -319,6 +463,162 @@ def _generate_tdl_channel(
     dft_matrix = np.exp(-1j * 2.0 * np.pi * np.outer(k_axis * delta_f, delays_s))
 
     h_flat = h_taps.transpose(1, 2, 3, 0).reshape(-1, L)
+    H_flat = h_flat @ dft_matrix.T
+    H = H_flat.reshape(T, N_tx, N_rx, N_fft).transpose(0, 3, 1, 2)
+
+    return H
+
+
+# ---------------------------------------------------------------------------
+# CDL channel generation
+# ---------------------------------------------------------------------------
+
+
+def _generate_cdl_channel(
+    rng: np.random.Generator,
+    num_ofdm_sym: int,
+    num_rb: int,
+    num_tx_ant: int,
+    num_rx_ant: int,
+    tau_rms_ns: float,
+    subcarrier_spacing_hz: float,
+    doppler_hz: float,
+    cdl_profile: Any,
+    fading_seed: int | None = None,
+    t_offset_s: float = 0.0,
+    tx_panel: PanelConfig | None = None,
+    rx_panel: PanelConfig | None = None,
+    xpd_db: float = 8.0,
+) -> np.ndarray:
+    """Generate a frequency-domain channel matrix via CDL (Clustered Delay Line).
+
+    Unlike TDL which uses Kronecker spatial correlation, CDL uses per-cluster
+    steering vectors from 3GPP-tabulated angles (AoD, AoA, ZoD, ZoA) to
+    generate physically accurate spatial structure.
+
+    Returns shape ``[T, RB, tx_ant, rx_ant]`` complex128.
+    """
+    T = num_ofdm_sym
+    N_tx = num_tx_ant
+    N_rx = num_rx_ant
+    N_fft = num_rb
+
+    tau_rms_s = tau_rms_ns * 1e-9
+    N_clusters = cdl_profile.num_clusters
+    pdp = cdl_profile.powers_normalized()
+    delays_s = cdl_profile.delays_seconds(tau_rms_s)
+
+    aod = cdl_profile.aod_rad()
+    aoa = cdl_profile.aoa_rad()
+    zod = cdl_profile.zod_rad()
+    zoa = cdl_profile.zoa_rad()
+
+    d_spacing = 0.5
+    fading_rng = np.random.default_rng(fading_seed) if fading_seed is not None else rng
+
+    # --- Per-cluster channel matrix: H_n = sqrt(P_n) * a_rx * a_tx^H * g_n ---
+    h_clusters = np.zeros((N_clusters, T, N_tx, N_rx), dtype=np.complex128)
+
+    xpr_linear = 10.0 ** (xpd_db / 10.0)
+
+    for n in range(N_clusters):
+        # Steering vectors with zenith (elevation = pi/2 - zenith for our convention)
+        elev_tx = np.pi / 2.0 - zod[n]
+        elev_rx = np.pi / 2.0 - zoa[n]
+
+        if tx_panel is not None and tx_panel.total == N_tx:
+            a_tx = _panel_steering_vector(tx_panel, aod[n], elev_tx, d_spacing)
+        else:
+            a_tx = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_tx) * np.sin(aod[n])) / np.sqrt(N_tx)
+
+        if rx_panel is not None and rx_panel.total == N_rx:
+            a_rx = _panel_steering_vector(rx_panel, aoa[n], elev_rx, d_spacing)
+        else:
+            a_rx = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_rx) * np.sin(aoa[n])) / np.sqrt(N_rx)
+
+        # Random complex gain per cluster (Rayleigh fading)
+        g_real = fading_rng.standard_normal((1, N_tx, N_rx))
+        g_imag = fading_rng.standard_normal((1, N_tx, N_rx))
+        g_iid = (g_real + 1j * g_imag) / math.sqrt(2.0)
+
+        # Cross-polarization: for dual-pol panels, apply XPR weighting
+        N_p_tx = tx_panel.n_p if tx_panel is not None else 1
+        N_p_rx = rx_panel.n_p if rx_panel is not None else 1
+        if N_p_tx == 2 and N_p_rx == 2:
+            xpr_weight = 1.0 / math.sqrt(1.0 + 1.0 / xpr_linear)
+            xpr_cross = 1.0 / math.sqrt(1.0 + xpr_linear)
+            N_spatial_tx = N_tx // 2
+            N_spatial_rx = N_rx // 2
+            phase_cross = fading_rng.uniform(0, 2 * np.pi, size=(1, 2, 2))
+            xpr_matrix = np.array([
+                [xpr_weight, xpr_cross * np.exp(1j * phase_cross[0, 0, 1])],
+                [xpr_cross * np.exp(1j * phase_cross[0, 1, 0]), xpr_weight],
+            ])
+            # Apply XPR: reshape g_iid to (spatial_tx, 2, spatial_rx, 2) and multiply
+            g_shaped = g_iid.reshape(1, N_spatial_tx, 2, N_spatial_rx, 2)
+            for p_tx in range(2):
+                for p_rx in range(2):
+                    g_shaped[:, :, p_tx, :, p_rx] *= xpr_matrix[p_tx, p_rx]
+            g_iid = g_shaped.reshape(1, N_tx, N_rx)
+
+        # Spatial channel via outer product structure
+        spatial = np.outer(a_tx, a_rx.conj())  # [N_tx, N_rx]
+        h_cluster_n = g_iid * spatial[None, :, :]  # [1, N_tx, N_rx]
+
+        # Scale by cluster power
+        h_cluster_n *= math.sqrt(pdp[n])
+
+        # Broadcast to T symbols
+        h_clusters[n] = np.broadcast_to(h_cluster_n, (T, N_tx, N_rx)).copy()
+
+    # LOS component for CDL-D/E
+    if cdl_profile.is_los and cdl_profile.k_factor_dB is not None:
+        K_lin = 10.0 ** (cdl_profile.k_factor_dB / 10.0)
+        nlos_scale = math.sqrt(1.0 / (1.0 + K_lin))
+        los_scale = math.sqrt(K_lin / (1.0 + K_lin))
+        los_idx = cdl_profile.los_tap_index
+
+        elev_tx_los = np.pi / 2.0 - zod[los_idx]
+        elev_rx_los = np.pi / 2.0 - zoa[los_idx]
+        if tx_panel is not None and tx_panel.total == N_tx:
+            a_tx_los = _panel_steering_vector(tx_panel, aod[los_idx], elev_tx_los, d_spacing)
+        else:
+            a_tx_los = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_tx) * np.sin(aod[los_idx])) / np.sqrt(N_tx)
+        if rx_panel is not None and rx_panel.total == N_rx:
+            a_rx_los = _panel_steering_vector(rx_panel, aoa[los_idx], elev_rx_los, d_spacing)
+        else:
+            a_rx_los = np.exp(1j * 2 * np.pi * d_spacing * np.arange(N_rx) * np.sin(aoa[los_idx])) / np.sqrt(N_rx)
+
+        los_matrix = np.outer(a_tx_los, a_rx_los.conj())
+        h_clusters[los_idx] = (
+            h_clusters[los_idx] * nlos_scale
+            + los_scale * math.sqrt(pdp[los_idx]) * los_matrix[None, :, :]
+        )
+
+    # --- Per-cluster Doppler via Jakes SoS (same as TDL) ---
+    if doppler_hz > 0 and T > 1:
+        N_sinusoids = 16
+        T_sym = 1.0 / subcarrier_spacing_hz
+        t_axis = t_offset_s + np.arange(T, dtype=np.float64) * T_sym
+        for n in range(N_clusters):
+            alpha_n = fading_rng.uniform(0, 2 * np.pi, size=N_sinusoids)
+            phi_n = fading_rng.uniform(0, 2 * np.pi, size=N_sinusoids)
+            doppler_real = np.zeros(T, dtype=np.float64)
+            doppler_imag = np.zeros(T, dtype=np.float64)
+            for ns in range(N_sinusoids):
+                f_shift = doppler_hz * np.cos(alpha_n[ns])
+                doppler_real += np.cos(2.0 * np.pi * f_shift * t_axis + phi_n[ns])
+                doppler_imag += np.sin(2.0 * np.pi * f_shift * t_axis + phi_n[ns])
+            doppler_process = (doppler_real + 1j * doppler_imag) / math.sqrt(N_sinusoids)
+            h_clusters[n] *= doppler_process[:, None, None]
+
+    # --- DFT: delay → frequency domain ---
+    k_axis = np.arange(N_fft, dtype=np.float64)
+    delta_f = 12 * subcarrier_spacing_hz
+    dft_matrix = np.exp(-1j * 2.0 * np.pi * np.outer(k_axis * delta_f, delays_s))
+
+    # h_clusters: [N_clusters, T, N_tx, N_rx] → sum over clusters with DFT weights
+    h_flat = h_clusters.transpose(1, 2, 3, 0).reshape(-1, N_clusters)
     H_flat = h_flat @ dft_matrix.T
     H = H_flat.reshape(T, N_tx, N_rx, N_fft).transpose(0, 3, 1, 2)
 
@@ -591,12 +891,33 @@ class InternalSimSource(DataSource):
         self.num_bs_rx_ant: int = int(_dict_get(cfg, "num_bs_rx_ant", _legacy_bs))
         self.num_ue_tx_ant: int = int(_dict_get(cfg, "num_ue_tx_ant", _legacy_ue))
         self.num_ue_rx_ant: int = int(_dict_get(cfg, "num_ue_rx_ant", _legacy_ue))
+
+        # Panel array config: [N_H, N_V, N_P] for dual-polarization support
+        _bs_panel_raw = _dict_get(cfg, "bs_panel", None)
+        _ue_panel_raw = _dict_get(cfg, "ue_panel", None)
+        if _bs_panel_raw is not None:
+            _bp = [int(x) for x in _bs_panel_raw]
+            self.bs_panel = PanelConfig(n_h=_bp[0], n_v=_bp[1], n_p=_bp[2])
+            self.num_bs_tx_ant = self.bs_panel.total
+            self.num_bs_rx_ant = self.bs_panel.total
+        else:
+            self.bs_panel: PanelConfig | None = None
+        if _ue_panel_raw is not None:
+            _up = [int(x) for x in _ue_panel_raw]
+            self.ue_panel = PanelConfig(n_h=_up[0], n_v=_up[1], n_p=_up[2])
+            self.num_ue_tx_ant = self.ue_panel.total
+            self.num_ue_rx_ant = self.ue_panel.total
+        else:
+            self.ue_panel: PanelConfig | None = None
+        self.xpd_db: float = float(_dict_get(cfg, "xpd_db", 8.0))
+
         self.num_bs_ant: int = max(self.num_bs_tx_ant, self.num_bs_rx_ant)
         self.num_ue_ant: int = max(self.num_ue_tx_ant, self.num_ue_rx_ant)
 
         # -- Power / mobility -------------------------------------------------
         self.tx_power_dbm: float = float(_dict_get(cfg, "tx_power_dbm", 43.0))
         self._tx_power_explicitly_set: bool = _dict_get(cfg, "tx_power_dbm", None) is not None
+        self.ue_tx_power_dbm: float = float(_dict_get(cfg, "ue_tx_power_dbm", 23.0))
         self.ue_speed_kmh: float = float(_dict_get(cfg, "ue_speed_kmh", 3.0))
         self.mobility_mode: str = str(_dict_get(cfg, "mobility_mode", "static"))
         from ._mobility import MOBILITY_MODES
@@ -623,11 +944,21 @@ class InternalSimSource(DataSource):
         if self.pilot_type_ul not in {"srs_zc", "csi_rs_gold"}:
             raise ValueError(f"Unknown pilot_type_ul {self.pilot_type_ul!r}; expected 'srs_zc' / 'csi_rs_gold'.")
         self.channel_est_mode: str = str(_dict_get(cfg, "channel_est_mode", "ls_linear"))
-        if self.channel_est_mode not in {"ideal", "ls_linear", "ls_mmse"}:
+        if self.channel_est_mode not in {"ideal", "ls_linear", "ls_mmse", "ls_hop_concat"}:
             raise ValueError(f"Unknown channel_est_mode {self.channel_est_mode!r}.")
         self.link: str = str(_dict_get(cfg, "link", "DL")).upper()
         if self.link not in {"UL", "DL", "BOTH"}:
             raise ValueError(f"link must be 'UL', 'DL', or 'both', got {self.link!r}.")
+
+        # -- HSR (High-Speed Rail) parameters -----------------------------------
+        self.topology_layout: str = str(_dict_get(cfg, "topology_layout", "hexagonal"))
+        if self.topology_layout not in {"hexagonal", "linear"}:
+            raise ValueError(f"topology_layout must be 'hexagonal' or 'linear', got {self.topology_layout!r}.")
+        self.hypercell_size: int = int(_dict_get(cfg, "hypercell_size", 1))
+        if self.hypercell_size < 1:
+            raise ValueError(f"hypercell_size must be >= 1, got {self.hypercell_size}")
+        self.track_offset_m: float = float(_dict_get(cfg, "track_offset_m", 80.0))
+        self.train_penetration_loss_db: float = float(_dict_get(cfg, "train_penetration_loss_db", 0.0))
 
         # -- Custom positions -------------------------------------------------
         self.custom_site_positions: list[dict[str, float]] | None = _dict_get(
@@ -658,35 +989,51 @@ class InternalSimSource(DataSource):
         if not self._tx_power_explicitly_set:
             _default_tx_power = {
                 "UMa_NLOS": 43.0,
+                "UMa_LOS": 43.0,
                 "UMi_NLOS": 33.0,
+                "UMi_LOS": 33.0,
                 "InF": 24.0,
             }
             self.tx_power_dbm = _default_tx_power.get(self.scenario, 43.0)
 
-        # -- Channel model profile (TDL-A through TDL-E) --------------------
-        from msg_embedding.channel_models.tdl import get_tdl_profile, list_tdl_profiles
-
+        # -- Channel model profile (CDL-A~E preferred, TDL-A~E fallback) ----
         self.channel_model_name: str = (
-            str(_dict_get(cfg, "channel_model", "TDL-C")).upper().replace("_", "-")
+            str(_dict_get(cfg, "channel_model", "CDL-C")).upper().replace("_", "-")
         )
-        try:
-            self._tdl_profile = get_tdl_profile(self.channel_model_name)
-        except ValueError as exc:
-            raise ValueError(
-                f"Unknown channel_model {self.channel_model_name!r}; "
-                f"available: {list_tdl_profiles()}"
-            ) from exc
-        self.num_taps: int = self._tdl_profile.num_taps
+        self._cdl_profile = None
+        self._tdl_profile = None
+        self._use_cdl: bool = False
 
-        # -- TDL model params -------------------------------------------------
-        # RMS delay spread in nanoseconds (38.901 Table 7.5-6)
-        _default_tau_rms = {"UMa_NLOS": 363.0, "UMi_NLOS": 129.0, "InF": 56.0}
+        if self.channel_model_name.startswith("CDL-"):
+            from msg_embedding.channel_models.cdl import get_cdl_profile, list_cdl_profiles
+            try:
+                self._cdl_profile = get_cdl_profile(self.channel_model_name)
+                self._use_cdl = True
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unknown channel_model {self.channel_model_name!r}; "
+                    f"available CDL: {list_cdl_profiles()}"
+                ) from exc
+            self.num_taps: int = self._cdl_profile.num_clusters
+        else:
+            from msg_embedding.channel_models.tdl import get_tdl_profile, list_tdl_profiles
+            try:
+                self._tdl_profile = get_tdl_profile(self.channel_model_name)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unknown channel_model {self.channel_model_name!r}; "
+                    f"available TDL: {list_tdl_profiles()}"
+                ) from exc
+            self.num_taps = self._tdl_profile.num_taps
+
+        # -- Channel model params -----------------------------------------------
+        _default_tau_rms = {"UMa_NLOS": 363.0, "UMa_LOS": 93.0, "UMi_NLOS": 129.0, "UMi_LOS": 65.0, "InF": 56.0}
         self.tau_rms_ns: float = float(
             _dict_get(cfg, "tau_rms_ns", _default_tau_rms.get(self.scenario, 200.0))
         )
-        # Rician K-factor: use profile default for LOS models, override if set
-        if self._tdl_profile.is_los and self._tdl_profile.k_factor_dB is not None:
-            _default_k = self._tdl_profile.k_factor_dB
+        _active_profile = self._cdl_profile if self._use_cdl else self._tdl_profile
+        if _active_profile is not None and _active_profile.is_los and _active_profile.k_factor_dB is not None:
+            _default_k = _active_profile.k_factor_dB
         else:
             _default_k = -100.0
         self.rician_k_db: float = float(_dict_get(cfg, "rician_k_db", _default_k))
@@ -742,13 +1089,25 @@ class InternalSimSource(DataSource):
         # -- Noise figure and thermal noise -----------------------------------
         self.noise_figure_db: float = float(_dict_get(cfg, "noise_figure_db", 7.0))
 
+        # -- Precoding parameters -----------------------------------------------
+        self.max_rank: int = int(_dict_get(cfg, "max_rank", 4))
+        self.rank_threshold: float = float(_dict_get(cfg, "rank_threshold", 0.1))
+
+        # -- Interferer precoding projection ----------------------------------
+        self.apply_interferer_precoding: bool = bool(
+            _dict_get(cfg, "apply_interferer_precoding", True)
+        )
+        self.store_interferer_channels: bool = bool(
+            _dict_get(cfg, "store_interferer_channels", False)
+        )
+
     # ------------------------------------------------------------------
     # Topology building
     # ------------------------------------------------------------------
     def _build_sites(self) -> list:
         """Build cell-site topology from config."""
-        from msg_embedding.topology.hex_grid import CellSite, make_hex_grid
-        from msg_embedding.topology.pci_planner import assign_pci_mod3
+        from msg_embedding.topology.hex_grid import CellSite, make_hex_grid, make_linear_grid
+        from msg_embedding.topology.pci_planner import assign_pci_hypercell, assign_pci_mod3
 
         if self.custom_site_positions:
             sites = [
@@ -769,6 +1128,15 @@ class InternalSimSource(DataSource):
                 )
                 for i, p in enumerate(self.custom_site_positions)
             ]
+        elif self.topology_layout == "linear":
+            sites = make_linear_grid(
+                num_sites=self.num_sites,
+                isd_m=self.isd_m,
+                sectors=self.sectors_per_site,
+                tx_height_m=self.tx_height_m,
+                scenario=self.scenario,
+                track_offset_m=self.track_offset_m,
+            )
         else:
             num_rings = _sites_to_rings(self.num_sites)
             sites = make_hex_grid(
@@ -778,7 +1146,10 @@ class InternalSimSource(DataSource):
                 tx_height_m=self.tx_height_m,
                 scenario=self.scenario,
             )
-        sites = assign_pci_mod3(sites)
+        if self.topology_layout == "linear" and self.hypercell_size > 1:
+            sites = assign_pci_hypercell(sites, self.hypercell_size)
+        else:
+            sites = assign_pci_mod3(sites)
         return sites
 
     # ------------------------------------------------------------------
@@ -856,12 +1227,14 @@ class InternalSimSource(DataSource):
         bs_pos: np.ndarray,
         ue_pos: np.ndarray,
         sf_override_db: float | None = None,
+        is_los: bool = False,
     ) -> tuple[float, float]:
         """Return ``(pathloss_dB, d_3d)`` for one BS→UE link.
 
         ``bs_pos`` and ``ue_pos`` are 3D position vectors [x, y, z].
         ``sf_override_db``: if set, use this shadow fading value instead
         of drawing a new one from ``rng``.
+        ``is_los``: if True, use the LOS path-loss model for this link.
         """
         d_3d = float(np.linalg.norm(bs_pos - ue_pos))
         d_3d = max(d_3d, 1.0)  # Minimum distance guard
@@ -869,13 +1242,15 @@ class InternalSimSource(DataSource):
         h_bs = float(bs_pos[2])
         h_ut = float(ue_pos[2])
 
-        pl_func = _PATHLOSS_MODELS[self.scenario]
+        effective_scenario = _LOS_SCENARIO_MAP.get(self.scenario, self.scenario) if is_los else self.scenario
+        pl_func = _PATHLOSS_MODELS[effective_scenario]
         pl_db, sigma_sf = pl_func(d_3d, fc_ghz, h_bs, h_ut)
         if sf_override_db is not None:
             shadow_db = sf_override_db
         else:
             shadow_db = float(rng.normal(0, sigma_sf))
-        return pl_db + shadow_db, d_3d
+        total_pl = pl_db + shadow_db + self.train_penetration_loss_db
+        return total_pl, d_3d
 
     # ------------------------------------------------------------------
     # Noise floor
@@ -1029,6 +1404,7 @@ class InternalSimSource(DataSource):
         doppler_hz_override: float | None = None,
         fading_seed: int | None = None,
         snapshot_t_offset_s: float = 0.0,
+        train_intf_ue_positions: np.ndarray | None = None,
     ) -> ChannelSample:
         """Generate one physically meaningful ChannelSample."""
         rng = np.random.default_rng(self._seed + idx)
@@ -1084,24 +1460,6 @@ class InternalSimSource(DataSource):
         # Rician K-factor (linear)
         rician_k_linear = 10.0 ** (self.rician_k_db / 10.0) if self.rician_k_db > -50 else 0.0
 
-        # -- Sample per-drop LSPs from 38.901 Table 7.5-6 (Fix 1) -----------
-        sf_override_db: float | None = None
-        if lsp_override is not None:
-            sample_tau_rms_ns = lsp_override["tau_rms_ns"]
-            sf_override_db = lsp_override.get("sf_db", None)
-        else:
-            lsp_params = _LSP_TABLE_38901.get(self.scenario)
-            if lsp_params is not None:
-                lgDS_mu, lgDS_sigma, _ = lsp_params["lgDS"]
-                sample_tau_rms_ns = 10.0 ** rng.normal(lgDS_mu, max(lgDS_sigma, 1e-6)) * 1e9
-                lgSF_mu, lgSF_sigma, _ = lsp_params["lgSF"]
-                rng.normal(lgSF_mu, max(lgSF_sigma, 1e-6))
-            else:
-                sample_tau_rms_ns = self.tau_rms_ns
-
-        # -- Per-scenario spatial correlation (Fix 4) -------------------------
-        spatial_rho = _SCENARIO_SPATIAL_RHO.get(self.scenario, 0.7)
-
         # -- LOS AoD/AoA for steering vectors (Fix 2) ------------------------
         # For mobility sequences, use deterministic fading RNG so that LOS
         # angles and LOS decision are consistent across snapshots.
@@ -1127,19 +1485,57 @@ class InternalSimSource(DataSource):
         p_los = _los_probability(self.scenario, d_2d_serving)
         is_los = env_rng.random() < p_los
 
-        # Select TDL profile based on LOS/NLOS
-        effective_tdl = self._tdl_profile
-        effective_k_linear = rician_k_linear
-        if is_los and not self._tdl_profile.is_los:
-            from msg_embedding.channel_models.tdl import get_tdl_profile
+        # -- Effective scenario for LOS/NLOS ----------------------------------
+        effective_scenario = _LOS_SCENARIO_MAP.get(self.scenario, self.scenario) if is_los else self.scenario
 
-            effective_tdl = get_tdl_profile("TDL-D")
-            effective_k_linear = 10.0 ** ((effective_tdl.k_factor_dB or 0.0) / 10.0)
-        elif not is_los and self._tdl_profile.is_los:
-            from msg_embedding.channel_models.tdl import get_tdl_profile
+        # -- Sample per-drop LSPs from 38.901 Table 7.5-6 (Fix 1) -----------
+        sf_override_db: float | None = None
+        if lsp_override is not None:
+            sample_tau_rms_ns = lsp_override["tau_rms_ns"]
+            sf_override_db = lsp_override.get("sf_db", None)
+        else:
+            lsp_params = _LSP_TABLE_38901.get(effective_scenario)
+            if lsp_params is not None:
+                # Use position-based deterministic RNG for spatial consistency.
+                # Quantize UE position to the minimum correlation distance so
+                # that nearby positions share the same large-scale parameters.
+                _corr_dists = [v[2] for v in lsp_params.values() if v[2] > 0]
+                _min_corr_d = min(_corr_dists) if _corr_dists else 10.0
+                _qx = int(np.floor(ue_pos[0] / _min_corr_d))
+                _qy = int(np.floor(ue_pos[1] / _min_corr_d))
+                _lsp_seed = hash((_qx, _qy, self._seed)) & 0xFFFFFFFF
+                _lsp_rng = np.random.default_rng(_lsp_seed)
 
-            effective_tdl = get_tdl_profile("TDL-C")
-            effective_k_linear = 0.0
+                lgDS_mu, lgDS_sigma, _ = lsp_params["lgDS"]
+                sample_tau_rms_ns = 10.0 ** _lsp_rng.normal(lgDS_mu, max(lgDS_sigma, 1e-6)) * 1e9
+                lgSF_mu, lgSF_sigma, _ = lsp_params["lgSF"]
+                sf_override_db = float(_lsp_rng.normal(lgSF_mu, max(lgSF_sigma, 1e-6)))
+            else:
+                sample_tau_rms_ns = self.tau_rms_ns
+
+        # -- Per-scenario spatial correlation (Fix 4) -------------------------
+        spatial_rho = _SCENARIO_SPATIAL_RHO.get(effective_scenario, 0.7)
+
+        # Select channel model profile based on LOS/NLOS
+        if self._use_cdl:
+            effective_cdl = self._cdl_profile
+            if is_los and not self._cdl_profile.is_los:
+                from msg_embedding.channel_models.cdl import get_cdl_profile
+                effective_cdl = get_cdl_profile("CDL-D")
+            elif not is_los and self._cdl_profile.is_los:
+                from msg_embedding.channel_models.cdl import get_cdl_profile
+                effective_cdl = get_cdl_profile("CDL-C")
+        else:
+            effective_tdl = self._tdl_profile
+            effective_k_linear = rician_k_linear
+            if is_los and not self._tdl_profile.is_los:
+                from msg_embedding.channel_models.tdl import get_tdl_profile
+                effective_tdl = get_tdl_profile("TDL-D")
+                effective_k_linear = 10.0 ** ((effective_tdl.k_factor_dB or 0.0) / 10.0)
+            elif not is_los and self._tdl_profile.is_los:
+                from msg_embedding.channel_models.tdl import get_tdl_profile
+                effective_tdl = get_tdl_profile("TDL-C")
+                effective_k_linear = 0.0
 
         # -- Compute pathloss + channel from every BS to UE -------------------
         noise_power_dbm = self._noise_power_dbm()
@@ -1149,32 +1545,54 @@ class InternalSimSource(DataSource):
 
         for k, site in enumerate(sites):
             bs_pos = np.asarray(site.position, dtype=np.float64)
-            pl_db, d_3d = self._compute_pathloss(rng, bs_pos, ue_pos, sf_override_db=sf_override_db)
+            pl_db, d_3d = self._compute_pathloss(rng, bs_pos, ue_pos, sf_override_db=sf_override_db, is_los=is_los)
             pl_all[k] = pl_db
 
-            # Received power in dBm
             rx_power_dbm[k] = self.tx_power_dbm - pl_db
 
-            # Generate small-scale fading channel using selected TDL profile
             cell_fading_seed = (fading_seed + k) if fading_seed is not None else None
-            h_k = _generate_tdl_channel(
-                rng=rng,
-                num_taps=self.num_taps,
-                num_ofdm_sym=T,
-                num_rb=RB,
-                num_tx_ant=BS_ant,
-                num_rx_ant=UE_ant,
-                tau_rms_ns=sample_tau_rms_ns,
-                subcarrier_spacing_hz=self.subcarrier_spacing,
-                doppler_hz=doppler_hz,
-                rician_k_linear=effective_k_linear,
-                tdl_profile=effective_tdl,
-                los_aod_rad=los_aod,
-                los_aoa_rad=los_aoa,
-                spatial_corr_rho=spatial_rho,
-                fading_seed=cell_fading_seed,
-                t_offset_s=snapshot_t_offset_s,
-            )
+            _tx_panel = self.bs_panel if sample_link == "DL" else self.ue_panel
+            _rx_panel = self.ue_panel if sample_link == "DL" else self.bs_panel
+
+            if self._use_cdl:
+                h_k = _generate_cdl_channel(
+                    rng=rng,
+                    num_ofdm_sym=T,
+                    num_rb=RB,
+                    num_tx_ant=BS_ant,
+                    num_rx_ant=UE_ant,
+                    tau_rms_ns=sample_tau_rms_ns,
+                    subcarrier_spacing_hz=self.subcarrier_spacing,
+                    doppler_hz=doppler_hz,
+                    cdl_profile=effective_cdl,
+                    fading_seed=cell_fading_seed,
+                    t_offset_s=snapshot_t_offset_s,
+                    tx_panel=_tx_panel,
+                    rx_panel=_rx_panel,
+                    xpd_db=self.xpd_db,
+                )
+            else:
+                h_k = _generate_tdl_channel(
+                    rng=rng,
+                    num_taps=self.num_taps,
+                    num_ofdm_sym=T,
+                    num_rb=RB,
+                    num_tx_ant=BS_ant,
+                    num_rx_ant=UE_ant,
+                    tau_rms_ns=sample_tau_rms_ns,
+                    subcarrier_spacing_hz=self.subcarrier_spacing,
+                    doppler_hz=doppler_hz,
+                    rician_k_linear=effective_k_linear,
+                    tdl_profile=effective_tdl,
+                    los_aod_rad=los_aod,
+                    los_aoa_rad=los_aoa,
+                    spatial_corr_rho=spatial_rho,
+                    fading_seed=cell_fading_seed,
+                    t_offset_s=snapshot_t_offset_s,
+                    tx_panel=_tx_panel,
+                    rx_panel=_rx_panel,
+                    xpd_db=self.xpd_db,
+                )
 
             # Keep channel normalised (unit avg power per element).
             # Pathloss is accounted for in the SNR/SIR/SINR scalars below;
@@ -1215,18 +1633,88 @@ class InternalSimSource(DataSource):
         else:
             h_interferers = None
 
+        # -- Place interfering UEs (positions shared by precoding + UL intf) ---
+        intf_ue_positions_per_cell: list[np.ndarray] = []
+        if len(interferer_indices) > 0 and self.num_interfering_ues > 0:
+            cell_radius = self.isd_m / math.sqrt(3.0)
+            for ki, k in enumerate(interferer_indices):
+                intf_bs_pos = np.asarray(sites[k].position, dtype=np.float64)
+                if train_intf_ue_positions is not None:
+                    _positions = train_intf_ue_positions[:self.num_interfering_ues]
+                else:
+                    _positions = _place_ues_uniform(
+                        rng, max(self.num_interfering_ues, 1), cell_radius,
+                        self.ue_height_m, center=intf_bs_pos[:2],
+                    )
+                intf_ue_positions_per_cell.append(_positions)
+
+        # -- Per-interferer DL precoding projection ----------------------------
+        intf_ranks: list[int] | None = None
+        if (
+            self.apply_interferer_precoding
+            and h_interferers is not None
+            and len(intf_ue_positions_per_cell) > 0
+        ):
+            from msg_embedding.phy_sim.precoding import project_interference_channels
+
+            h_bs_to_own: list[np.ndarray] = []
+            for ki, k in enumerate(interferer_indices):
+                intf_bs_pos = np.asarray(sites[k].position, dtype=np.float64)
+                sched_idx = int(rng.integers(len(intf_ue_positions_per_cell[ki])))
+                sched_ue_pos = intf_ue_positions_per_cell[ki][sched_idx]
+                pl_db_own, _ = self._compute_pathloss(rng, intf_bs_pos, sched_ue_pos)
+                own_seed = (fading_seed + 5000 + ki) if fading_seed is not None else None
+                if self._use_cdl:
+                    h_dl_own = _generate_cdl_channel(
+                        rng=rng,
+                        num_ofdm_sym=T,
+                        num_rb=RB,
+                        num_tx_ant=BS_ant,
+                        num_rx_ant=UE_ant,
+                        tau_rms_ns=sample_tau_rms_ns,
+                        subcarrier_spacing_hz=self.subcarrier_spacing,
+                        doppler_hz=doppler_hz,
+                        cdl_profile=effective_cdl,
+                        fading_seed=own_seed,
+                        t_offset_s=snapshot_t_offset_s,
+                        tx_panel=self.bs_panel,
+                        rx_panel=self.ue_panel,
+                        xpd_db=self.xpd_db,
+                    )
+                else:
+                    h_dl_own = _generate_tdl_channel(
+                        rng=rng,
+                        num_taps=self.num_taps,
+                        num_ofdm_sym=T,
+                        num_rb=RB,
+                        num_tx_ant=BS_ant,
+                        num_rx_ant=UE_ant,
+                        tau_rms_ns=sample_tau_rms_ns,
+                        subcarrier_spacing_hz=self.subcarrier_spacing,
+                        doppler_hz=doppler_hz,
+                        rician_k_linear=0.0,
+                        fading_seed=own_seed,
+                        tdl_profile=effective_tdl if not self._use_cdl else None,
+                        t_offset_s=snapshot_t_offset_s,
+                    )
+                h_bs_to_own.append(h_dl_own)
+
+            h_interferers, intf_ranks = project_interference_channels(
+                h_interferers,
+                h_bs_to_own,
+                max_rank=self.max_rank,
+                rank_threshold=self.rank_threshold,
+            )
+            del h_bs_to_own
+
         # -- UL interferers: independent per-UE channels H(UE_kn → BS_serving) -
         h_ul_intf_per_ue: list[np.ndarray] | None = None
         if len(interferer_indices) > 0 and self.num_interfering_ues > 0:
-            cell_radius = self.isd_m / math.sqrt(3.0)
             serving_bs_pos = np.asarray(sites[serving_idx].position, dtype=np.float64)
             h_ul_intf_per_ue = []
             for ki, k in enumerate(interferer_indices):
                 intf_bs_pos = np.asarray(sites[k].position, dtype=np.float64)
-                intf_ue_positions = _place_ues_uniform(
-                    rng, self.num_interfering_ues, cell_radius,
-                    self.ue_height_m, center=intf_bs_pos[:2],
-                )
+                intf_ue_positions = intf_ue_positions_per_cell[ki]
                 ue_channels = []
                 for n in range(self.num_interfering_ues):
                     ue_n_pos = intf_ue_positions[n]
@@ -1236,24 +1724,45 @@ class InternalSimSource(DataSource):
                         max(10.0 ** (rx_pwr_n / 10.0) / (p_serving_linear + 1e-30), 1e-15)
                     )
                     ue_seed = (fading_seed + K + ki * self.num_interfering_ues + n) if fading_seed is not None else None
-                    h_ue_n = _generate_tdl_channel(
-                        rng=rng,
-                        num_taps=self.num_taps,
-                        num_ofdm_sym=T,
-                        num_rb=RB,
-                        num_tx_ant=UE_ant,
-                        num_rx_ant=BS_ant,
-                        tau_rms_ns=sample_tau_rms_ns,
-                        subcarrier_spacing_hz=self.subcarrier_spacing,
-                        doppler_hz=doppler_hz,
-                        rician_k_linear=effective_k_linear,
-                        tdl_profile=effective_tdl,
-                        los_aod_rad=los_aod,
-                        los_aoa_rad=los_aoa,
-                        spatial_corr_rho=spatial_rho,
-                        fading_seed=ue_seed,
-                        t_offset_s=snapshot_t_offset_s,
-                    )
+                    if self._use_cdl:
+                        h_ue_n = _generate_cdl_channel(
+                            rng=rng,
+                            num_ofdm_sym=T,
+                            num_rb=RB,
+                            num_tx_ant=UE_ant,
+                            num_rx_ant=BS_ant,
+                            tau_rms_ns=sample_tau_rms_ns,
+                            subcarrier_spacing_hz=self.subcarrier_spacing,
+                            doppler_hz=doppler_hz,
+                            cdl_profile=effective_cdl if self._use_cdl else None,
+                            fading_seed=ue_seed,
+                            t_offset_s=snapshot_t_offset_s,
+                            tx_panel=self.ue_panel,
+                            rx_panel=self.bs_panel,
+                            xpd_db=self.xpd_db,
+                        )
+                    else:
+                        h_ue_n = _generate_tdl_channel(
+                            rng=rng,
+                            num_taps=self.num_taps,
+                            num_ofdm_sym=T,
+                            num_rb=RB,
+                            num_tx_ant=UE_ant,
+                            num_rx_ant=BS_ant,
+                            tau_rms_ns=sample_tau_rms_ns,
+                            subcarrier_spacing_hz=self.subcarrier_spacing,
+                            doppler_hz=doppler_hz,
+                            rician_k_linear=effective_k_linear,
+                            tdl_profile=effective_tdl,
+                            los_aod_rad=los_aod,
+                            los_aoa_rad=los_aoa,
+                            spatial_corr_rho=spatial_rho,
+                            fading_seed=ue_seed,
+                            t_offset_s=snapshot_t_offset_s,
+                            tx_panel=self.ue_panel,
+                            rx_panel=self.bs_panel,
+                            xpd_db=self.xpd_db,
+                        )
                     h_ue_n = (h_ue_n * rel_amp_n).astype(np.complex64)
                     ue_channels.append(h_ue_n)
                 h_ul_intf_per_ue.append(
@@ -1261,13 +1770,13 @@ class InternalSimSource(DataSource):
                 )
 
         # -- SNR / SIR / SINR --------------------------------------------------
-        # Serving signal power (dBm)
+        # Serving signal power (dBm) — DL uses BS TX power
         p_serving_dbm = rx_power_dbm[serving_idx]
 
-        # SNR = P_serving - N0
+        # DL SNR = P_serving - N0
         snr_db = p_serving_dbm - noise_power_dbm
 
-        # SIR = P_serving - P_interference (sum of all interferers in linear)
+        # DL SIR = P_serving - P_interference (sum of all interferers in linear)
         if len(interferer_indices) > 0:
             p_interf_linear = np.sum(10.0 ** (rx_power_dbm[interferer_indices] / 10.0))
             p_interf_dbm = 10.0 * math.log10(max(p_interf_linear, 1e-30))
@@ -1278,10 +1787,19 @@ class InternalSimSource(DataSource):
         # SINR = -10 log10(10^(-SNR/10) + 10^(-SIR/10))
         sinr_db = -10.0 * math.log10(10.0 ** (-snr_db / 10.0) + 10.0 ** (-sir_db / 10.0))
 
+        # UL SINR uses UE TX power (typically 23 dBm vs BS 43 dBm)
+        _tx_power_offset = self.tx_power_dbm - self.ue_tx_power_dbm
+        ul_snr_db_val = snr_db - _tx_power_offset
+        ul_sinr_db_val = -10.0 * math.log10(
+            10.0 ** (-ul_snr_db_val / 10.0) + 10.0 ** (-sir_db / 10.0)
+        )
+
         # Clamp to contract bounds
         snr_db = _clamp_db(snr_db)
         sir_db = _clamp_db(sir_db)
         sinr_db = _clamp_db(sinr_db)
+        ul_snr_db_val = _clamp_db(ul_snr_db_val)
+        ul_sinr_db_val = _clamp_db(ul_sinr_db_val)
 
         # -- Interference-aware channel estimation ----------------------------
         from msg_embedding.data.sources._interference_estimation import (
@@ -1323,6 +1841,9 @@ class InternalSimSource(DataSource):
                 ul_symbol_mask=ul_symbol_mask,
                 srs_rb_indices=srs_rb_idx,
                 h_interferers_ul_per_ue=h_ul_intf_per_ue,
+                srs_resource_cfg=self._srs_resource_cfg,
+                doppler_hz=doppler_hz,
+                ul_snr_dB=ul_snr_db_val,
             )
             h_serving_est = paired_result["h_dl_est"]
             h_ul_true_out = paired_result["h_ul_true"]
@@ -1358,35 +1879,89 @@ class InternalSimSource(DataSource):
 
             direction: str = "UL" if sample_link == "UL" else "DL"
             _sym_mask = ul_symbol_mask if direction == "UL" else dl_symbol_mask
-            est_result = estimate_channel_with_interference(
-                h_serving_true=h_serving_true,
-                h_interferers=h_interferers,
-                pilots_serving=pilots,
-                interferer_cell_ids=intf_cell_ids,
-                direction=direction,  # type: ignore[arg-type]
-                snr_dB=snr_db,
-                rng=rng,
-                est_mode=self.channel_est_mode,
-                tau_rms_ns=sample_tau_rms_ns,
-                subcarrier_spacing=self.subcarrier_spacing,
-                serving_cell_id=serving_pci,
-                num_interfering_ues=n_intf_ues,
-                valid_symbol_mask=_sym_mask,
-                srs_rb_indices=_srs_rb,
-                srs_slot=slot_idx,
-                srs_symbol=pilot_symbol if direction == "UL" else 0,
-                srs_group_hopping=self.srs_group_hopping,
-                srs_sequence_hopping=self.srs_sequence_hopping,
-                srs_K_TC=self.srs_comb,
-                srs_num_rb=len(_srs_rb) if _srs_rb is not None else None,
-                h_interferers_ul_per_ue=h_ul_intf_per_ue if direction == "UL" else None,
-            )
+            _est_snr = ul_snr_db_val if direction == "UL" else snr_db
+
+            if self.channel_est_mode == "ls_hop_concat" and direction == "UL":
+                from msg_embedding.data.sources._interference_estimation import (
+                    estimate_channel_hop_concat,
+                )
+                est_result = estimate_channel_hop_concat(
+                    h_serving_true=h_serving_true,
+                    h_interferers=h_interferers,
+                    interferer_cell_ids=intf_cell_ids,
+                    direction="UL",
+                    snr_dB=_est_snr,
+                    rng=rng,
+                    srs_resource_cfg=self._srs_resource_cfg,
+                    current_slot=slot_idx,
+                    srs_symbol=pilot_symbol,
+                    doppler_hz=doppler_hz,
+                    subcarrier_spacing_hz=self.subcarrier_spacing,
+                    total_rb=RB,
+                    serving_cell_id=serving_pci,
+                    num_interfering_ues=n_intf_ues,
+                    srs_group_hopping=self.srs_group_hopping,
+                    srs_sequence_hopping=self.srs_sequence_hopping,
+                    srs_K_TC=self.srs_comb,
+                    h_interferers_ul_per_ue=h_ul_intf_per_ue,
+                )
+            else:
+                _est_mode = "ls_linear" if (self.channel_est_mode == "ls_hop_concat" and direction == "DL") else self.channel_est_mode
+                est_result = estimate_channel_with_interference(
+                    h_serving_true=h_serving_true,
+                    h_interferers=h_interferers,
+                    pilots_serving=pilots,
+                    interferer_cell_ids=intf_cell_ids,
+                    direction=direction,  # type: ignore[arg-type]
+                    snr_dB=_est_snr,
+                    rng=rng,
+                    est_mode=_est_mode,
+                    tau_rms_ns=sample_tau_rms_ns,
+                    subcarrier_spacing=self.subcarrier_spacing,
+                    serving_cell_id=serving_pci,
+                    num_interfering_ues=n_intf_ues,
+                    valid_symbol_mask=_sym_mask,
+                    srs_rb_indices=_srs_rb,
+                    srs_slot=slot_idx,
+                    srs_symbol=pilot_symbol if direction == "UL" else 0,
+                    srs_group_hopping=self.srs_group_hopping,
+                    srs_sequence_hopping=self.srs_sequence_hopping,
+                    srs_K_TC=self.srs_comb,
+                    srs_num_rb=len(_srs_rb) if _srs_rb is not None else None,
+                    h_interferers_ul_per_ue=h_ul_intf_per_ue if direction == "UL" else None,
+                )
             h_serving_est = est_result.h_est
             if est_result.sir_dB is not None:
                 sir_db = _clamp_db(est_result.sir_dB)
                 sinr_db = _clamp_db(
                     -10.0 * math.log10(10.0 ** (-snr_db / 10.0) + 10.0 ** (-sir_db / 10.0))
                 )
+
+        # -- SRS-based Pre-SINR (as measured at BS from UL estimation) --------
+        pre_sinr_db_out: float | None = None
+        pre_sinr_per_rb_out: np.ndarray | None = None
+        # Determine which UL true/est channels to use for Pre-SINR
+        _h_ul_t = h_ul_true_out if h_ul_true_out is not None else (
+            h_serving_true if sample_link == "UL" else None
+        )
+        _h_ul_e = h_ul_est_out if h_ul_est_out is not None else (
+            h_serving_est if sample_link == "UL" else None
+        )
+        if _h_ul_t is not None and _h_ul_e is not None:
+            # Per-RB Pre-SINR: signal / estimation error
+            _sig_per_rb = np.mean(np.abs(_h_ul_t) ** 2, axis=(0, 2, 3))  # [RB]
+            _err = _h_ul_e - _h_ul_t
+            _err_per_rb = np.mean(np.abs(_err) ** 2, axis=(0, 2, 3))  # [RB]
+            _pre_sinr_linear = _sig_per_rb / (_err_per_rb + 1e-30)
+            pre_sinr_per_rb_out = np.clip(
+                10.0 * np.log10(_pre_sinr_linear + 1e-30), -50.0, 50.0
+            ).astype(np.float32)
+            # Wideband Pre-SINR
+            _wb_sig = float(np.mean(_sig_per_rb))
+            _wb_err = float(np.mean(_err_per_rb))
+            pre_sinr_db_out = float(np.clip(
+                10.0 * math.log10(_wb_sig / (_wb_err + 1e-30) + 1e-30), -50.0, 50.0
+            ))
 
         # -- DL precoding weights from UL estimate (SRS-based beamforming) ---
         from msg_embedding.phy_sim.precoding import compute_dl_precoding
@@ -1430,11 +2005,18 @@ class InternalSimSource(DataSource):
             ssb_meas = SSBMeasurement(
                 num_beams=self.num_ssb_beams,
                 num_bs_ant=BS_ant,
+                ref_power_offset_dBm=30.0,
             )
             all_pcis = [s.pci for s in sites]
             noise_power_lin = 10.0 ** (noise_power_dbm / 10.0) * 1e-3
+
+            h_ssb = []
+            for k in range(K):
+                rx_lin = 10.0 ** (rx_power_dbm[k] / 10.0) * 1e-3
+                h_ssb.append((h_all[k] * np.sqrt(rx_lin)).astype(np.complex64))
+
             ssb_result = ssb_meas.measure(
-                h_per_cell=h_all,
+                h_per_cell=h_ssb,
                 pcis=all_pcis,
                 noise_power_lin=noise_power_lin,
             )
@@ -1446,7 +2028,7 @@ class InternalSimSource(DataSource):
 
             if paired:
                 ssb_result_ideal = ssb_meas.measure(
-                    h_per_cell=h_all,
+                    h_per_cell=h_ssb,
                     pcis=all_pcis,
                     noise_power_lin=1e-30,
                 )
@@ -1467,6 +2049,7 @@ class InternalSimSource(DataSource):
             "bandwidth_hz": self.bandwidth_hz,
             "subcarrier_spacing": self.subcarrier_spacing,
             "tx_power_dbm": self.tx_power_dbm,
+            "ue_tx_power_dbm": self.ue_tx_power_dbm,
             "ue_speed_kmh": self.ue_speed_kmh,
             "mobility_mode": self.mobility_mode,
             "ue_distribution": self.ue_distribution,
@@ -1499,7 +2082,7 @@ class InternalSimSource(DataSource):
             "noise_power_dbm": noise_power_dbm,
             "serving_cell_index": serving_idx,
             "serving_pci": serving_pci,
-            "pathloss_serving_db": float(pl_all[serving_idx]),
+            "pathloss_dB": float(pl_all[serving_idx]),
             "pathloss_all_db": [float(pl_all[k]) for k in range(K)],
             "rx_power_serving_dbm": float(p_serving_dbm),
             "rx_power_all_dbm": [float(rx_power_dbm[k]) for k in range(K)],
@@ -1508,6 +2091,9 @@ class InternalSimSource(DataSource):
             ),
             "sample_tau_rms_ns": float(sample_tau_rms_ns),
             "is_los": bool(is_los),
+            "bs_panel": [self.bs_panel.n_h, self.bs_panel.n_v, self.bs_panel.n_p] if self.bs_panel else None,
+            "ue_panel": [self.ue_panel.n_h, self.ue_panel.n_v, self.ue_panel.n_p] if self.ue_panel else None,
+            "xpd_db": self.xpd_db,
             "los_probability": float(p_los),
             "custom_positions": self.custom_site_positions is not None,
             "num_ues": self.num_ues,
@@ -1515,7 +2101,11 @@ class InternalSimSource(DataSource):
             "seed": self._seed,
             "mock": False,
             "dl_rank": rank_out,
+            "interferer_precoding_applied": self.apply_interferer_precoding,
+            "store_interferer_channels": self.store_interferer_channels,
         }
+        if intf_ranks is not None:
+            meta["interferer_ranks"] = intf_ranks
         if w_dl_out is not None:
             meta["w_dl_shape"] = list(w_dl_out.shape)
             meta["w_dl"] = w_dl_out
@@ -1523,8 +2113,8 @@ class InternalSimSource(DataSource):
         return ChannelSample(
             h_serving_true=h_serving_true,
             h_serving_est=h_serving_est,
-            h_interferers=h_interferers,
-            interference_signal=interference_signal,
+            h_interferers=h_interferers if self.store_interferer_channels else None,
+            interference_signal=interference_signal if self.store_interferer_channels else None,
             noise_power_dBm=noise_power_dbm,
             snr_dB=snr_db,
             sir_dB=sir_db if len(interferer_indices) > 0 else None,
@@ -1548,6 +2138,10 @@ class InternalSimSource(DataSource):
             ul_sir_dB=ul_sir_db_out,
             dl_sir_dB=dl_sir_db_out,
             num_interfering_ues=n_intf_ues_out,
+            ul_pre_sinr_dB=pre_sinr_db_out,
+            ul_pre_sinr_per_rb=pre_sinr_per_rb_out,
+            ul_snr_dB=ul_snr_db_val,
+            ul_sinr_dB=ul_sinr_db_val,
             ssb_rsrp_true_dBm=ssb_rsrp_true,
             ssb_sinr_true_dB=ssb_sinr_true,
             w_dl=w_dl_out,
@@ -1622,6 +2216,7 @@ class InternalSimSource(DataSource):
         # -- Mobility: generate trajectory if mode is not static ---------------
         trajectory_positions: np.ndarray | None = None
         trajectory_dopplers: np.ndarray | None = None
+        train_ue_positions: np.ndarray | None = None
         static_pos: np.ndarray | None = None
 
         if self.mobility_mode == "static" or self.ue_speed_kmh <= 0:
@@ -1638,8 +2233,21 @@ class InternalSimSource(DataSource):
             from ._mobility import compute_doppler_from_trajectory, generate_trajectory
 
             traj_rng = np.random.default_rng(self._seed + 9999)
-            # Place initial UE position
-            init_pos = self._place_ues(traj_rng, sites, 1)[0]
+
+            mob_mode = self.mobility_mode
+            mob_kwargs: dict = {}
+            is_hsr = self.topology_layout == "linear" and mob_mode in ("linear", "track")
+            if is_hsr:
+                mob_mode = "track"
+                unique_site_ids = sorted({s.site_id for s in sites})
+                track_centerline = []
+                for sid in unique_site_ids:
+                    pos = next(s.position for s in sites if s.site_id == sid)
+                    track_centerline.append([pos[0], 0.0])
+                mob_kwargs["track_waypoints"] = np.array(track_centerline, dtype=np.float64)
+                init_pos = np.array([track_centerline[0][0], 0.0, self.ue_height_m], dtype=np.float64)
+            else:
+                init_pos = self._place_ues(traj_rng, sites, 1)[0]
 
             cell_radius = self.isd_m / math.sqrt(3.0)
             num_rings = _sites_to_rings(self.num_sites)
@@ -1651,19 +2259,40 @@ class InternalSimSource(DataSource):
                 speed_kmh=self.ue_speed_kmh,
                 num_steps=self.num_samples,
                 dt_s=self.sample_interval_s,
-                mode=self.mobility_mode,
+                mode=mob_mode,
                 boundary_radius_m=network_radius,
                 boundary_center=np.zeros(2, dtype=np.float64),
+                **mob_kwargs,
             )
 
-            # Doppler relative to serving cell (use site 0 as rough reference)
-            serving_pos = np.asarray(sites[0].position, dtype=np.float64)
-            trajectory_dopplers = compute_doppler_from_trajectory(
-                positions=trajectory_positions,
-                bs_pos=serving_pos,
-                carrier_freq_hz=self.carrier_freq_hz,
-                dt_s=self.sample_interval_s,
-            )
+            # HSR: generate train UE positions for all passengers
+            train_ue_positions: np.ndarray | None = None
+            if is_hsr and self.num_interfering_ues > 0:
+                from ._mobility import generate_train_positions
+                train_rng = np.random.default_rng(self._seed + 6666)
+                train_ue_positions = generate_train_positions(
+                    base_trajectory=trajectory_positions,
+                    num_ues=self.num_interfering_ues,
+                    rng=train_rng,
+                )
+
+            # Doppler: per-sample relative to nearest cell
+            trajectory_dopplers = np.zeros(self.num_samples, dtype=np.float64)
+            all_site_pos = np.array([s.position[:2] for s in sites], dtype=np.float64)
+            for t_idx in range(self.num_samples):
+                ue_xy = trajectory_positions[t_idx, :2]
+                dists = np.linalg.norm(all_site_pos - ue_xy[None, :], axis=1)
+                nearest_site_idx = int(np.argmin(dists))
+                nearest_pos = np.asarray(sites[nearest_site_idx].position, dtype=np.float64)
+                t_slice = max(0, t_idx - 1)
+                sub_traj = trajectory_positions[t_slice:t_idx + 2]
+                if len(sub_traj) >= 2:
+                    d_before = np.linalg.norm(sub_traj[0, :2] - nearest_pos[:2])
+                    d_after = np.linalg.norm(sub_traj[-1, :2] - nearest_pos[:2])
+                    v_radial = (d_after - d_before) / (self.sample_interval_s * (len(sub_traj) - 1))
+                    trajectory_dopplers[t_idx] = -v_radial / (3e8 / self.carrier_freq_hz)
+                else:
+                    trajectory_dopplers[t_idx] = 0.0
 
         # -- Custom positions: spatially correlated LSPs -----------------------
         trajectory_lsps: list[dict] | None = None
@@ -1703,6 +2332,10 @@ class InternalSimSource(DataSource):
             if trajectory_dopplers is not None:
                 doppler_ov = float(np.abs(trajectory_dopplers[idx]))
 
+            intf_pos_ov: np.ndarray | None = None
+            if train_ue_positions is not None:
+                intf_pos_ov = train_ue_positions[:, idx, :]
+
             t_offset = idx * self.sample_interval_s if mobility_fading_seed is not None else 0.0
 
             if self.link == "BOTH":
@@ -1715,6 +2348,7 @@ class InternalSimSource(DataSource):
                     doppler_hz_override=doppler_ov,
                     fading_seed=mobility_fading_seed,
                     snapshot_t_offset_s=t_offset,
+                    train_intf_ue_positions=intf_pos_ov,
                 )
             else:
                 yield self._generate_one_sample(
@@ -1725,6 +2359,7 @@ class InternalSimSource(DataSource):
                     doppler_hz_override=doppler_ov,
                     fading_seed=mobility_fading_seed,
                     snapshot_t_offset_s=t_offset,
+                    train_intf_ue_positions=intf_pos_ov,
                 )
 
     # ------------------------------------------------------------------
@@ -1767,6 +2402,7 @@ class InternalSimSource(DataSource):
             "carrier_freq_hz": self.carrier_freq_hz,
             "bandwidth_hz": self.bandwidth_hz,
             "tx_power_dbm": self.tx_power_dbm,
+            "ue_tx_power_dbm": self.ue_tx_power_dbm,
             "ue_speed_kmh": self.ue_speed_kmh,
             "mobility_mode": self.mobility_mode,
             "sample_interval_s": self.sample_interval_s,

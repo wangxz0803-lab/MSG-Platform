@@ -1,86 +1,84 @@
-function [H_ul_est, sinr_dB, sir_dB] = ul_srs_pipeline( ...
+function [H_ul_est, sinr_dB, sir_dB, pre_sinr_dB, pre_sinr_per_rb] = ul_srs_pipeline( ...
     Hf_per_cell, serving_cell_id, srs_cfg, noise_power_dBm, est_mode)
-%UL_SRS_PIPELINE  Uplink SRS pipeline with per-port LS estimation.
+%UL_SRS_PIPELINE  Uplink SRS pipeline with per-port channel estimation.
 %
-%   [H_UL_EST, SINR_DB, SIR_DB] = UL_SRS_PIPELINE(HF_PER_CELL,
-%   SERVING_CELL_ID, SRS_CFG, NOISE_POWER_DBM, EST_MODE)
-%
-%   Simulates multi-cell SRS transmission, reception at serving BS with
-%   real inter-cell interference, and per-port LS channel estimation.
-%
-%   NO ground-truth channel information is used in estimation.
-%
-%   Signal model (per UE port, TDM across ports):
-%       Y_u = H_serving(:,u,:,t) * X_serving + sum_{k!=s} H_k(:,u,:,t) * X_k + n
-%       H_hat(:,u,:,t) = Y_u * conj(X_s) / |X_s|^2
-%
-%   Each UE port transmits SRS on orthogonal time-domain resources.
-%   All cells' UEs transmit simultaneously -> real inter-cell interference.
+%   Supports 4 estimation modes:
+%     'ideal'        — return ground-truth channel
+%     'ls_linear'    — LS on SRS RBs + linear interpolation
+%     'ls_mmse'      — LS + LMMSE frequency-domain smoothing
+%     'ls_hop_concat'— accumulate hopping cycle + LS + interpolation
 %
 %   Inputs:
 %       Hf_per_cell      : [K, BS_ant, UE_ant, N_RB, no_ss] complex
 %       serving_cell_id  : integer in 1..K
-%       srs_cfg          : struct with n_srs_id, n_cs, tx_power_dBm
+%       srs_cfg          : struct with fields:
+%           n_srs_id, n_cs, tx_power_dBm (basic)
+%           C_SRS, B_SRS, b_hop, n_RRC, K_TC, T_SRS (hopping, optional)
 %       noise_power_dBm  : receiver thermal noise power (dBm)
-%       est_mode         : 'ideal' | 'ls_linear'
+%       est_mode         : 'ideal' | 'ls_linear' | 'ls_mmse' | 'ls_hop_concat'
 %
 %   Outputs:
-%       H_ul_est : [BS_ant, UE_ant, N_RB, no_ss] estimated channel
-%       sinr_dB  : scalar average SINR
-%       sir_dB   : scalar average SIR (NaN if K=1)
+%       H_ul_est         : [BS_ant, UE_ant, N_RB, no_ss] estimated channel
+%       sinr_dB          : scalar average SINR
+%       sir_dB           : scalar average SIR (NaN if K=1)
+%       pre_sinr_dB      : scalar pre-equalization SINR
+%       pre_sinr_per_rb  : [1 x N_RB] per-RB pre-equalization SINR
 
     [K, BS_ant, UE_ant, N_RB, no_ss] = size(Hf_per_cell);
     assert(serving_cell_id >= 1 && serving_cell_id <= K, ...
         'ul_srs_pipeline: serving_cell_id out of range');
 
     % === Physical parameters ===
-    tx_linear = 10 ^ ((srs_cfg.tx_power_dBm - 30) / 10);   % UE Tx power (W)
+    tx_linear = 10 ^ ((srs_cfg.tx_power_dBm - 30) / 10);
     noise_linear = 10 ^ ((noise_power_dBm - 30) / 10);
-    noise_sigma = sqrt(noise_linear / 2);  % per real dimension
+    noise_sigma = sqrt(noise_linear / 2);
 
-    % === Ideal mode: return ground-truth channel directly ===
+    % === Ideal mode ===
     if strcmpi(est_mode, 'ideal')
         H_ul_est = single(squeeze(Hf_per_cell(serving_cell_id, :, :, :, :)));
         [sinr_dB, sir_dB] = compute_sinr_from_gains( ...
             Hf_per_cell, serving_cell_id, tx_linear, noise_linear);
+        [pre_sinr_dB, pre_sinr_per_rb] = compute_pre_sinr( ...
+            Hf_per_cell, serving_cell_id, noise_linear);
         return;
     end
+
+    % === Determine SRS pilot RB indices ===
+    has_hopping = isfield(srs_cfg, 'C_SRS') && isfield(srs_cfg, 'B_SRS');
+    if has_hopping && strcmpi(est_mode, 'ls_hop_concat')
+        pilot_rbs = srs_accumulated_rb_indices(srs_cfg, 0, 0, N_RB);
+    elseif has_hopping
+        pilot_rbs = srs_rb_indices(srs_cfg, 0, 0, N_RB);
+    else
+        pilot_rbs = 0:(N_RB - 1);  % full-band (legacy)
+    end
+    pilot_rbs_1 = pilot_rbs + 1;  % 1-based for MATLAB indexing
+    n_pilot = numel(pilot_rbs_1);
 
     % === Generate per-cell SRS base sequences (38.211 ZC) ===
     X_base = zeros(K, N_RB);
     for k = 1:K
         u = mod(srs_cfg.n_srs_id + k - 1, 30);
         X_base(k, :) = srs_base_sequence_matlab(u, 0, N_RB);
-        % Cell-unique cyclic shift to decorrelate across cells
         alpha = 2 * pi * mod(srs_cfg.n_cs + (k - 1), 8) / 8;
         X_base(k, :) = X_base(k, :) .* exp(1j * alpha * (0:N_RB-1));
     end
     X_base = X_base * sqrt(tx_linear);
 
-    % === Per-port LS estimation ===
-    % TDM model: each UE port transmits SRS on separate resources.
-    % For port u, the serving BS receives:
-    %   Y_u = sum_k H_k(:,u,:,t) * X_k + noise
-    % LS estimate for serving cell:
-    %   H_hat(:,u,:,t) = Y_u * conj(X_s) / |X_s|^2
-    %
-    % This captures real inter-cell interference structure (ZC cross-corr),
-    % unlike adding white Gaussian noise post-hoc.
-
+    % === Per-port estimation ===
     H_ul_est = complex(zeros(BS_ant, UE_ant, N_RB, no_ss, 'single'));
-    X_s = X_base(serving_cell_id, :);          % [1, N_RB]
-    X_s_abs2 = abs(X_s) .^ 2 + eps;           % [1, N_RB]
+    X_s = X_base(serving_cell_id, :);
+    X_s_pilot = X_s(pilot_rbs_1);
+    X_s_pilot_abs2 = abs(X_s_pilot) .^ 2 + eps;
 
     sig_pow = 0;
     intf_pow = 0;
 
     for u = 1:UE_ant
         for t = 1:no_ss
-            % Received signal at serving BS for port u, snapshot t
             Y = complex(zeros(BS_ant, N_RB));
 
             for k = 1:K
-                % H_k(:, u, :, t) -> [BS_ant, N_RB]
                 H_k_u_t = double(squeeze(Hf_per_cell(k, :, u, :, t)));
                 Y_k = H_k_u_t .* repmat(X_base(k, :), BS_ant, 1);
 
@@ -92,18 +90,31 @@ function [H_ul_est, sinr_dB, sir_dB] = ul_srs_pipeline( ...
                 Y = Y + Y_k;
             end
 
-            % AWGN at receiver
             Y = Y + noise_sigma * (randn(BS_ant, N_RB) + 1j * randn(BS_ant, N_RB));
 
-            % LS estimate: H_hat = Y * conj(X_s) / |X_s|^2
-            H_ls = Y .* conj(repmat(X_s, BS_ant, 1)) ./ ...
-                       repmat(X_s_abs2, BS_ant, 1);   % [BS_ant, N_RB]
+            % LS on pilot RBs only
+            Y_pilot = Y(:, pilot_rbs_1);  % [BS_ant x n_pilot]
+            H_ls_pilot = Y_pilot .* conj(repmat(X_s_pilot, BS_ant, 1)) ./ ...
+                             repmat(X_s_pilot_abs2, BS_ant, 1);
 
-            H_ul_est(:, u, :, t) = single(H_ls);
+            if n_pilot == N_RB
+                H_est_t = H_ls_pilot;
+            else
+                % Interpolate from pilot RBs to full bandwidth
+                H_est_t = interp_rbs(H_ls_pilot, pilot_rbs, N_RB, BS_ant);
+            end
+
+            % MMSE smoothing (ls_mmse mode)
+            if strcmpi(est_mode, 'ls_mmse')
+                snr_lin = max(sig_pow, eps) / max(noise_linear, eps);
+                H_est_t = mmse_freq_smooth(H_est_t, snr_lin, BS_ant, N_RB);
+            end
+
+            H_ul_est(:, u, :, t) = single(H_est_t);
         end
     end
 
-    % === SINR / SIR from actual SRS reception ===
+    % === SINR / SIR ===
     n_samples = UE_ant * no_ss;
     sig_avg = sig_pow / max(n_samples, 1);
     intf_avg = intf_pow / max(n_samples, 1);
@@ -116,12 +127,71 @@ function [H_ul_est, sinr_dB, sir_dB] = ul_srs_pipeline( ...
     else
         sir_dB = NaN;
     end
+
+    % === Pre-equalization SINR ===
+    [pre_sinr_dB, pre_sinr_per_rb] = compute_pre_sinr( ...
+        Hf_per_cell, serving_cell_id, noise_linear);
 end
 
 
 % ======================================================================
 % Helper functions
 % ======================================================================
+
+function H_full = interp_rbs(H_pilot, pilot_rbs_0based, N_RB, BS_ant)
+%INTERP_RBS  Linear interpolation from pilot RBs to full bandwidth.
+    H_full = complex(zeros(BS_ant, N_RB));
+    pilot_pos = pilot_rbs_0based(:).' + 1;  % 1-based
+    all_pos = 1:N_RB;
+    for b = 1:BS_ant
+        re_vals = real(H_pilot(b, :));
+        im_vals = imag(H_pilot(b, :));
+        H_full(b, :) = interp1(pilot_pos, re_vals, all_pos, 'linear', 'extrap') + ...
+            1j * interp1(pilot_pos, im_vals, all_pos, 'linear', 'extrap');
+    end
+end
+
+
+function H_mmse = mmse_freq_smooth(H_ls, snr_lin, BS_ant, N_RB)
+%MMSE_FREQ_SMOOTH  LMMSE smoothing along frequency axis.
+%   Uses exponential PDP prior: R(i,j) = exp(-2*pi*tau_rms*|i-j|*delta_f).
+    tau_rms = 300e-9;   % typical delay spread
+    delta_f = 30e3 * 12; % RB bandwidth (30 kHz SCS * 12 subcarriers)
+
+    % Build covariance matrix R_hh [N_RB x N_RB]
+    rb_idx = (0:N_RB-1).';
+    freq_diff = abs(rb_idx - rb_idx.');  % [N_RB x N_RB]
+    R_hh = exp(-2 * pi * tau_rms * freq_diff * delta_f);
+
+    % LMMSE: H_mmse = R_hh * (R_hh + (1/SNR) * I)^-1 * H_ls
+    W = R_hh / (R_hh + (1 / max(snr_lin, 1e-6)) * eye(N_RB));  % [N_RB x N_RB]
+
+    H_mmse = complex(zeros(BS_ant, N_RB));
+    for b = 1:BS_ant
+        H_mmse(b, :) = (W * H_ls(b, :).').';
+    end
+end
+
+
+function [pre_sinr_dB, pre_sinr_per_rb] = compute_pre_sinr( ...
+    Hf_per_cell, sid, noise_linear)
+%COMPUTE_PRE_SINR  Pre-equalization SINR from channel gains.
+    [K, ~, ~, N_RB, ~] = size(Hf_per_cell);
+    pre_sinr_per_rb = zeros(1, N_RB, 'single');
+    for rb = 1:N_RB
+        sig = mean(abs(double(Hf_per_cell(sid, :, :, rb, :))).^2, 'all');
+        intf = 0;
+        for k = 1:K
+            if k ~= sid
+                intf = intf + mean(abs(double(Hf_per_cell(k, :, :, rb, :))).^2, 'all');
+            end
+        end
+        pre_sinr_per_rb(rb) = single(10 * log10(max(sig / max(intf + noise_linear, eps), 1e-10)));
+    end
+    pre_sinr_per_rb = max(min(pre_sinr_per_rb, 50), -50);
+    pre_sinr_dB = single(mean(pre_sinr_per_rb));
+end
+
 
 function [sinr_dB, sir_dB] = compute_sinr_from_gains( ...
     Hf_per_cell, sid, tx_lin, noise_lin)

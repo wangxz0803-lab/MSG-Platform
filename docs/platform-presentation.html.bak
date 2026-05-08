@@ -1,0 +1,2104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MSG-Embedding 平台 · 5G NR 信道数据工厂与模型评估引擎</title>
+<style>
+/* ========== RESET & BASE ========== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; font-size: 16px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: #0a0e17;
+  color: #e0e6ed;
+  line-height: 1.7;
+  overflow-x: hidden;
+}
+a { color: #60a5fa; text-decoration: none; }
+a:hover { color: #93c5fd; }
+code, .mono { font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace; }
+
+/* ========== ANIMATED BACKGROUND ========== */
+.bg-grid {
+  position: fixed; inset: 0; z-index: -2;
+  background-image:
+    linear-gradient(rgba(59,130,246,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.04) 1px, transparent 1px);
+  background-size: 60px 60px;
+  animation: gridDrift 20s linear infinite;
+}
+@keyframes gridDrift { to { background-position: 60px 60px; } }
+
+.bg-glow {
+  position: fixed; z-index: -1;
+  width: 800px; height: 800px;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.15;
+  pointer-events: none;
+}
+.bg-glow--1 { top: -200px; left: -200px; background: #3b82f6; animation: float1 12s ease-in-out infinite; }
+.bg-glow--2 { bottom: -300px; right: -200px; background: #8b5cf6; animation: float2 15s ease-in-out infinite; }
+.bg-glow--3 { top: 40%; left: 50%; background: #06b6d4; animation: float3 18s ease-in-out infinite; }
+@keyframes float1 { 50% { transform: translate(80px, 60px); } }
+@keyframes float2 { 50% { transform: translate(-60px, -80px); } }
+@keyframes float3 { 50% { transform: translate(-40px, 50px); } }
+
+/* ========== SCROLL-REVEAL ========== */
+.reveal {
+  opacity: 0; transform: translateY(40px);
+  transition: opacity 0.8s cubic-bezier(.16,1,.3,1), transform 0.8s cubic-bezier(.16,1,.3,1);
+}
+.reveal.visible { opacity: 1; transform: translateY(0); }
+.reveal-delay-1 { transition-delay: 0.15s; }
+.reveal-delay-2 { transition-delay: 0.3s; }
+.reveal-delay-3 { transition-delay: 0.45s; }
+.reveal-delay-4 { transition-delay: 0.6s; }
+
+/* ========== NAV ========== */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 40px; height: 64px;
+  background: rgba(10,14,23,0.85);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.3s;
+}
+nav.scrolled { background: rgba(10,14,23,0.95); }
+.nav-logo {
+  font-size: 1.15rem; font-weight: 700; letter-spacing: -0.5px;
+  background: linear-gradient(135deg, #60a5fa, #a78bfa);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.nav-links { display: flex; gap: 20px; list-style: none; flex-wrap: wrap; }
+.nav-links a {
+  font-size: 0.78rem; color: #94a3b8;
+  transition: color 0.2s; position: relative;
+}
+.nav-links a:hover, .nav-links a.active { color: #e0e6ed; }
+.nav-links a::after {
+  content: ''; position: absolute; bottom: -4px; left: 0; right: 0;
+  height: 2px; background: #60a5fa;
+  transform: scaleX(0); transform-origin: left;
+  transition: transform 0.3s;
+}
+.nav-links a:hover::after, .nav-links a.active::after { transform: scaleX(1); }
+
+/* ========== SECTIONS ========== */
+section { padding: 100px 40px; max-width: 1200px; margin: 0 auto; }
+section:first-of-type { padding-top: 160px; }
+
+/* ========== HERO ========== */
+.hero { text-align: center; padding-top: 200px; padding-bottom: 100px; }
+.hero-badge {
+  display: inline-block; padding: 6px 16px; border-radius: 20px;
+  background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25);
+  font-size: 0.8rem; color: #60a5fa; margin-bottom: 24px;
+  animation: badgePulse 3s ease-in-out infinite;
+}
+@keyframes badgePulse { 50% { box-shadow: 0 0 20px rgba(59,130,246,0.15); } }
+.hero h1 {
+  font-size: 3.2rem; font-weight: 800; letter-spacing: -1.5px;
+  line-height: 1.15; margin-bottom: 20px;
+  background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hero h1 .gradient-text {
+  background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hero .subtitle {
+  font-size: 1.15rem; color: #94a3b8; max-width: 720px; margin: 0 auto 40px; line-height: 1.8;
+}
+.hero-stats { display: flex; justify-content: center; gap: 40px; margin-top: 40px; flex-wrap: wrap; }
+.hero-stat { text-align: center; }
+.hero-stat .number {
+  font-size: 2.4rem; font-weight: 800;
+  background: linear-gradient(135deg, #60a5fa, #a78bfa);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hero-stat .label { font-size: 0.78rem; color: #64748b; margin-top: 4px; }
+
+/* ========== HEADINGS ========== */
+.section-label {
+  display: inline-block; font-size: 0.72rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 2px; color: #60a5fa;
+  margin-bottom: 12px;
+}
+.section-title {
+  font-size: 2rem; font-weight: 700; letter-spacing: -0.8px;
+  margin-bottom: 16px; color: #f1f5f9;
+}
+.section-desc { font-size: 0.95rem; color: #94a3b8; max-width: 640px; margin-bottom: 48px; }
+
+/* ========== CARDS ========== */
+.card-grid { display: grid; gap: 24px; }
+.card-grid--2 { grid-template-columns: repeat(2, 1fr); }
+.card-grid--3 { grid-template-columns: repeat(3, 1fr); }
+.card-grid--4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 900px) {
+  .card-grid--3, .card-grid--4 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .card-grid--2, .card-grid--3, .card-grid--4 { grid-template-columns: 1fr; }
+}
+
+.card {
+  background: rgba(15,23,42,0.6);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px; padding: 32px;
+  transition: transform 0.3s, box-shadow 0.3s, border-color 0.3s;
+  position: relative; overflow: hidden;
+}
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+  border-color: rgba(59,130,246,0.2);
+}
+.card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  opacity: 0; transition: opacity 0.3s;
+}
+.card:hover::before { opacity: 1; }
+.card-icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem; margin-bottom: 16px;
+}
+.card-icon--blue { background: rgba(59,130,246,0.1); }
+.card-icon--purple { background: rgba(139,92,246,0.1); }
+.card-icon--cyan { background: rgba(6,182,212,0.1); }
+.card-icon--green { background: rgba(34,197,94,0.1); }
+.card-icon--amber { background: rgba(245,158,11,0.1); }
+.card-icon--red { background: rgba(239,68,68,0.1); }
+.card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 10px; color: #f1f5f9; }
+.card p { font-size: 0.88rem; color: #94a3b8; line-height: 1.65; }
+
+/* ========== TAGS ========== */
+.tag {
+  display: inline-block; padding: 3px 10px; border-radius: 6px;
+  font-size: 0.72rem; font-weight: 500;
+  background: rgba(59,130,246,0.1); color: #60a5fa;
+  border: 1px solid rgba(59,130,246,0.2);
+}
+.tag--purple { background: rgba(139,92,246,0.1); color: #a78bfa; border-color: rgba(139,92,246,0.2); }
+.tag--cyan { background: rgba(6,182,212,0.1); color: #22d3ee; border-color: rgba(6,182,212,0.2); }
+.tag--green { background: rgba(34,197,94,0.1); color: #4ade80; border-color: rgba(34,197,94,0.2); }
+.tag--amber { background: rgba(245,158,11,0.1); color: #fbbf24; border-color: rgba(245,158,11,0.2); }
+.tag--red { background: rgba(239,68,68,0.1); color: #f87171; border-color: rgba(239,68,68,0.2); }
+.tag--pink { background: rgba(244,114,182,0.1); color: #f9a8d4; border-color: rgba(244,114,182,0.2); }
+.tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+/* ========== DATA TABLE ========== */
+.data-table-wrap {
+  overflow-x: auto; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+thead { background: rgba(30,41,59,0.8); }
+th {
+  padding: 14px 16px; text-align: left; font-weight: 600;
+  color: #94a3b8; border-bottom: 1px solid rgba(255,255,255,0.06);
+  white-space: nowrap;
+}
+td {
+  padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: #cbd5e1;
+}
+tbody tr { transition: background 0.2s; }
+tbody tr:hover { background: rgba(59,130,246,0.05); }
+
+/* ========== ARCHITECTURE DIAGRAM ========== */
+.arch-diagram {
+  background: rgba(15,23,42,0.5);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 20px; padding: 40px 32px;
+  position: relative; overflow: hidden;
+}
+.arch-row {
+  display: flex; align-items: center; justify-content: center;
+  gap: 12px; margin: 16px 0; flex-wrap: wrap;
+}
+.arch-box {
+  padding: 12px 18px; border-radius: 10px;
+  font-size: 0.8rem; font-weight: 600;
+  border: 1px solid; text-align: center;
+  min-width: 120px;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.arch-box:hover { transform: scale(1.05); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+.arch-box--blue { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.3); color: #93c5fd; }
+.arch-box--purple { background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.3); color: #c4b5fd; }
+.arch-box--cyan { background: rgba(6,182,212,0.12); border-color: rgba(6,182,212,0.3); color: #67e8f9; }
+.arch-box--green { background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.3); color: #86efac; }
+.arch-box--amber { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); color: #fcd34d; }
+.arch-box--pink { background: rgba(244,114,182,0.12); border-color: rgba(244,114,182,0.3); color: #f9a8d4; }
+.arch-arrow { font-size: 1.3rem; color: #475569; }
+.arch-arrow--down { display: block; text-align: center; font-size: 1.4rem; margin: 4px 0; color: #475569; }
+
+/* ========== CODE BLOCKS ========== */
+.code-block {
+  background: rgba(15,23,42,0.8);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px; padding: 20px 24px;
+  overflow-x: auto; font-size: 0.8rem;
+  line-height: 1.7; margin: 16px 0;
+  position: relative;
+}
+.code-block .lang-label {
+  position: absolute; top: 8px; right: 12px;
+  font-size: 0.65rem; color: #475569;
+  text-transform: uppercase; letter-spacing: 1px;
+}
+.code-block code { color: #e2e8f0; white-space: pre; }
+.code-block .kw { color: #c084fc; }
+.code-block .fn { color: #60a5fa; }
+.code-block .str { color: #4ade80; }
+.code-block .num { color: #fbbf24; }
+.code-block .cm { color: #64748b; font-style: italic; }
+.code-block .op { color: #f472b6; }
+
+/* ========== FORMULA ========== */
+.formula-block {
+  background: rgba(15,23,42,0.6);
+  border: 1px solid rgba(139,92,246,0.15);
+  border-left: 3px solid #8b5cf6;
+  border-radius: 0 10px 10px 0;
+  padding: 20px 28px; margin: 16px 0;
+  font-size: 1.05rem; color: #e2e8f0;
+  overflow-x: auto;
+}
+.formula-block .formula-label {
+  font-size: 0.7rem; color: #a78bfa;
+  text-transform: uppercase; letter-spacing: 1.5px;
+  margin-bottom: 10px; display: block;
+}
+.formula {
+  font-family: 'Cambria Math', 'Times New Roman', serif;
+  font-size: 1.05em; color: #e2e8f0;
+  letter-spacing: 0.3px;
+}
+.formula sub { font-size: 0.7em; vertical-align: sub; }
+.formula sup { font-size: 0.7em; vertical-align: super; }
+.formula .var { font-style: italic; color: #93c5fd; }
+.formula .const { color: #fbbf24; }
+
+/* ========== CHALLENGE CARDS ========== */
+.challenge-card {
+  background: rgba(15,23,42,0.6);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px; padding: 28px;
+  margin-bottom: 24px;
+  transition: border-color 0.3s;
+}
+.challenge-card:hover { border-color: rgba(59,130,246,0.2); }
+.challenge-header {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+}
+.challenge-id {
+  background: rgba(239,68,68,0.15); color: #f87171;
+  padding: 4px 10px; border-radius: 6px;
+  font-size: 0.72rem; font-weight: 700;
+}
+.challenge-title { font-size: 1.05rem; font-weight: 600; color: #f1f5f9; }
+.challenge-section { margin: 12px 0; }
+.challenge-section-label {
+  font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
+}
+.challenge-section-label.problem { color: #f87171; }
+.challenge-section-label.cause { color: #fbbf24; }
+.challenge-section-label.solution { color: #4ade80; }
+.challenge-section-label.result { color: #60a5fa; }
+.challenge-section p { font-size: 0.88rem; color: #94a3b8; }
+
+/* ========== SVG DIAGRAMS ========== */
+.svg-container {
+  background: rgba(15,23,42,0.5);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px; padding: 24px;
+  margin: 24px 0; overflow: hidden;
+}
+.svg-container svg { width: 100%; height: auto; display: block; }
+.svg-container .svg-title {
+  font-size: 0.8rem; color: #64748b; text-align: center;
+  margin-top: 12px; letter-spacing: 0.5px;
+}
+
+/* ========== UI MOCKUP ========== */
+.ui-mockup {
+  background: rgba(15,23,42,0.5);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px; overflow: hidden; margin: 24px 0;
+}
+.ui-mockup-header {
+  background: rgba(30,41,59,0.8);
+  padding: 10px 16px; display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.ui-dot { width: 10px; height: 10px; border-radius: 50%; }
+.ui-dot--r { background: #f87171; }
+.ui-dot--y { background: #fbbf24; }
+.ui-dot--g { background: #4ade80; }
+.ui-mockup-title { font-size: 0.72rem; color: #64748b; margin-left: 8px; }
+.ui-mockup-body { padding: 24px; }
+
+/* ========== METRIC CARDS ========== */
+.metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 800px) { .metric-grid { grid-template-columns: repeat(2, 1fr); } }
+.metric-card {
+  background: rgba(15,23,42,0.6);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 14px; padding: 24px; text-align: center;
+  transition: border-color 0.3s, transform 0.3s;
+}
+.metric-card:hover { border-color: rgba(59,130,246,0.2); transform: translateY(-2px); }
+.metric-card .metric-name {
+  font-size: 0.82rem; color: #64748b; margin-bottom: 8px;
+  text-transform: uppercase; letter-spacing: 1px;
+}
+.metric-card .metric-formula {
+  font-family: 'Cambria Math', serif; font-size: 0.95rem; color: #e2e8f0;
+  margin: 12px 0; min-height: 40px; display: flex; align-items: center; justify-content: center;
+}
+.metric-card .metric-desc {
+  font-size: 0.78rem; color: #94a3b8; line-height: 1.5;
+}
+
+/* ========== TWO-COL LAYOUT ========== */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; }
+@media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
+
+/* ========== TRUST LAYERS ========== */
+.trust-layer {
+  border-left: 3px solid; padding: 24px 28px; margin-bottom: 24px;
+  background: rgba(15,23,42,0.4); border-radius: 0 12px 12px 0;
+}
+.trust-layer--l1 { border-color: #3b82f6; }
+.trust-layer--l2 { border-color: #8b5cf6; }
+.trust-layer--l3 { border-color: #06b6d4; }
+.trust-layer h4 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; color: #f1f5f9; }
+.trust-layer p { font-size: 0.88rem; color: #94a3b8; }
+
+/* ========== MISC ========== */
+.divider { height: 1px; background: rgba(255,255,255,0.06); margin: 48px 0; }
+.highlight { color: #60a5fa; font-weight: 600; }
+.highlight--green { color: #4ade80; }
+.highlight--amber { color: #fbbf24; }
+.highlight--purple { color: #a78bfa; }
+.text-sm { font-size: 0.85rem; }
+.text-xs { font-size: 0.75rem; }
+.text-muted { color: #64748b; }
+.mt-8 { margin-top: 8px; }
+.mt-16 { margin-top: 16px; }
+.mt-24 { margin-top: 24px; }
+.mt-32 { margin-top: 32px; }
+.mb-16 { margin-bottom: 16px; }
+.mb-24 { margin-bottom: 24px; }
+.flex-center { display: flex; align-items: center; justify-content: center; }
+.gap-8 { gap: 8px; }
+.gap-16 { gap: 16px; }
+
+/* ========== STEP INDICATOR ========== */
+.steps { display: flex; align-items: center; justify-content: center; gap: 0; margin: 24px 0; }
+.step-item { display: flex; align-items: center; gap: 0; }
+.step-num {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.82rem; font-weight: 700;
+  background: rgba(59,130,246,0.15); color: #60a5fa;
+  border: 2px solid rgba(59,130,246,0.3);
+}
+.step-num.active { background: #3b82f6; color: #fff; box-shadow: 0 0 16px rgba(59,130,246,0.4); }
+.step-label { font-size: 0.72rem; color: #94a3b8; margin-left: 8px; margin-right: 16px; }
+.step-line { width: 40px; height: 2px; background: rgba(59,130,246,0.2); margin: 0 4px; }
+
+/* ========== TOKEN DIAGRAM ========== */
+.token-strip {
+  display: flex; gap: 4px; flex-wrap: wrap; margin: 16px 0;
+}
+.token-cell {
+  flex: 0 0 auto; padding: 6px 10px; border-radius: 6px;
+  font-size: 0.7rem; font-weight: 600; text-align: center;
+  border: 1px solid; min-width: 60px;
+  transition: transform 0.2s;
+}
+.token-cell:hover { transform: scale(1.08); }
+
+/* Footer */
+footer {
+  text-align: center; padding: 60px 40px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  font-size: 0.8rem; color: #475569;
+}
+</style>
+</head>
+<body>
+<div class="bg-grid"></div>
+<div class="bg-glow bg-glow--1"></div>
+<div class="bg-glow bg-glow--2"></div>
+<div class="bg-glow bg-glow--3"></div>
+
+<!-- ========================= NAV ========================= -->
+<nav id="navbar">
+  <div class="nav-logo">MSG-Embedding</div>
+  <ul class="nav-links">
+    <li><a href="#hero">首页</a></li>
+    <li><a href="#why">痛点</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#sources">数据源</a></li>
+    <li><a href="#workflow">操作流程</a></li>
+    <li><a href="#tokens">Token架构</a></li>
+    <li><a href="#tech-deep">技术图解</a></li>
+    <li><a href="#model">模型</a></li>
+    <li><a href="#eval">评估</a></li>
+    <li><a href="#challenges">工程实战</a></li>
+    <li><a href="#trust">可信度</a></li>
+  </ul>
+</nav>
+
+<!-- ========================= 1. HERO ========================= -->
+<section class="hero" id="hero">
+  <div class="reveal">
+    <div class="hero-badge">5G NR Channel Intelligence Platform</div>
+    <h1>MSG-Embedding<br><span class="gradient-text">信道数据工厂与模型评估引擎</span></h1>
+    <p class="subtitle">
+      从 3GPP 标准仿真、射线追踪到 MATLAB QuaDRiGa —— 三源融合的信道数据采集、16维Token特征提取、
+      ChannelMAE 自监督训练与 6 维度标准化评估，一站式解决 5G NR 信道表征学习的数据与评估难题。
+    </p>
+  </div>
+  <div class="hero-stats reveal reveal-delay-1">
+    <div class="hero-stat">
+      <div class="number"><span class="counter" data-target="3">0</span></div>
+      <div class="label">异构数据源</div>
+    </div>
+    <div class="hero-stat">
+      <div class="number"><span class="counter" data-target="16">0</span></div>
+      <div class="label">维 Token 架构</div>
+    </div>
+    <div class="hero-stat">
+      <div class="number"><span class="counter" data-target="6">0</span></div>
+      <div class="label">评估指标维度</div>
+    </div>
+    <div class="hero-stat">
+      <div class="number"><span class="counter" data-target="286">0</span>+</div>
+      <div class="label">自动化测试</div>
+    </div>
+    <div class="hero-stat">
+      <div class="number"><span class="counter" data-target="8">0</span></div>
+      <div class="label">工程难题攻克</div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 2. WHY ========================= -->
+<section id="why">
+  <div class="reveal">
+    <div class="section-label">Motivation</div>
+    <h2 class="section-title">为什么需要这个平台？</h2>
+    <p class="section-desc">5G NR 信道表征学习面临三大核心挑战，每一个都足以阻断研究进展。</p>
+  </div>
+  <div class="card-grid card-grid--3">
+    <div class="card reveal reveal-delay-1">
+      <div class="card-icon card-icon--red">&#x1F4C9;</div>
+      <h3>信道数据严重匮乏</h3>
+      <p>真实 5G 信道数据获取成本极高：需要基站设备、频谱授权、测试终端。公开数据集几乎为零，
+        研究者只能依赖简化仿真，难以覆盖 UMa/UMi/InF/HSR 等多样场景。
+        缺乏标准化的数据格式更使不同来源的数据无法互通。</p>
+    </div>
+    <div class="card reveal reveal-delay-2">
+      <div class="card-icon card-icon--amber">&#x1F527;</div>
+      <h3>数据来源割裂孤立</h3>
+      <p>统计模型（TDL）快但缺空间细节；射线追踪（Sionna RT）精确但极慢且易失败；
+        QuaDRiGa 物理保真度最高但依赖 MATLAB。三类工具接口各异、功率标定不一致、
+        方向互易处理不同，无法直接混合使用。功率差异可达 10 万倍（<span class="highlight">F-004</span>）。</p>
+    </div>
+    <div class="card reveal reveal-delay-3">
+      <div class="card-icon card-icon--purple">&#x1F4CA;</div>
+      <h3>模型评估缺乏标准</h3>
+      <p>信道 Embedding 质量如何衡量？传统分类准确率无法捕捉"嵌入空间连续性"和"邻域一致性"。
+        缺少标准化的评估流程：测试集随机划分、指标选择不一、结果不可复现。
+        没有统一基准，模型迭代就是盲人摸象。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 3. ARCHITECTURE ========================= -->
+<section id="arch">
+  <div class="reveal">
+    <div class="section-label">Architecture</div>
+    <h2 class="section-title">平台架构总览</h2>
+    <p class="section-desc">数据工厂 + 评估引擎的双核架构，训练外置，平台聚焦数据生产与模型评测。</p>
+  </div>
+
+  <!-- Data Flow SVG -->
+  <div class="svg-container reveal reveal-delay-1">
+    <svg viewBox="0 0 1000 340" xmlns="http://www.w3.org/2000/svg">
+      <!-- Three Sources -->
+      <rect x="20" y="20" width="160" height="56" rx="10" fill="rgba(59,130,246,0.15)" stroke="rgba(59,130,246,0.4)" stroke-width="1.5"/>
+      <text x="100" y="52" text-anchor="middle" fill="#93c5fd" font-size="12" font-weight="600">Internal Sim (TDL)</text>
+      <rect x="20" y="90" width="160" height="56" rx="10" fill="rgba(245,158,11,0.15)" stroke="rgba(245,158,11,0.4)" stroke-width="1.5"/>
+      <text x="100" y="122" text-anchor="middle" fill="#fcd34d" font-size="12" font-weight="600">Sionna RT</text>
+      <rect x="20" y="160" width="160" height="56" rx="10" fill="rgba(34,197,94,0.15)" stroke="rgba(34,197,94,0.4)" stroke-width="1.5"/>
+      <text x="100" y="192" text-anchor="middle" fill="#86efac" font-size="12" font-weight="600">QuaDRiGa Real</text>
+
+      <!-- Arrows to ChannelSample -->
+      <line x1="180" y1="48" x2="240" y2="118" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <line x1="180" y1="118" x2="240" y2="118" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+      <line x1="180" y1="188" x2="240" y2="118" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- ChannelSample -->
+      <rect x="244" y="88" width="150" height="60" rx="10" fill="rgba(139,92,246,0.15)" stroke="rgba(139,92,246,0.4)" stroke-width="1.5"/>
+      <text x="319" y="113" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="600">ChannelSample</text>
+      <text x="319" y="130" text-anchor="middle" fill="#7c3aed" font-size="9">[T, RB, BS_ant, UE_ant]</text>
+
+      <!-- Arrow -->
+      <line x1="394" y1="118" x2="440" y2="118" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- Bridge -->
+      <rect x="444" y="88" width="120" height="60" rx="10" fill="rgba(6,182,212,0.15)" stroke="rgba(6,182,212,0.4)" stroke-width="1.5"/>
+      <text x="504" y="113" text-anchor="middle" fill="#67e8f9" font-size="11" font-weight="600">Bridge</text>
+      <text x="504" y="130" text-anchor="middle" fill="#0891b2" font-size="9">特征提取 + 门控</text>
+
+      <!-- Arrow -->
+      <line x1="564" y1="118" x2="610" y2="118" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- 16 Tokens -->
+      <rect x="614" y="78" width="130" height="80" rx="10" fill="rgba(244,114,182,0.15)" stroke="rgba(244,114,182,0.4)" stroke-width="1.5"/>
+      <text x="679" y="107" text-anchor="middle" fill="#f9a8d4" font-size="11" font-weight="600">16 Tokens</text>
+      <text x="679" y="124" text-anchor="middle" fill="#db2777" font-size="9">+ 8 Gates</text>
+      <text x="679" y="141" text-anchor="middle" fill="#db2777" font-size="9">[B, 16, 128]</text>
+
+      <!-- Arrow -->
+      <line x1="744" y1="118" x2="790" y2="118" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- ChannelMAE -->
+      <rect x="794" y="88" width="130" height="60" rx="10" fill="rgba(59,130,246,0.15)" stroke="rgba(59,130,246,0.4)" stroke-width="2"/>
+      <text x="859" y="113" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="700">ChannelMAE</text>
+      <text x="859" y="130" text-anchor="middle" fill="#3b82f6" font-size="9">MAE + Contrastive</text>
+
+      <!-- Down arrow to Embedding -->
+      <line x1="859" y1="148" x2="859" y2="190" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- Embedding -->
+      <rect x="794" y="194" width="130" height="50" rx="10" fill="rgba(34,197,94,0.15)" stroke="rgba(34,197,94,0.4)" stroke-width="1.5"/>
+      <text x="859" y="215" text-anchor="middle" fill="#86efac" font-size="11" font-weight="600">16-D Embedding</text>
+      <text x="859" y="232" text-anchor="middle" fill="#16a34a" font-size="9">L2 归一化</text>
+
+      <!-- Down arrow to Eval -->
+      <line x1="859" y1="244" x2="859" y2="278" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- Eval -->
+      <rect x="774" y="282" width="170" height="50" rx="10" fill="rgba(245,158,11,0.15)" stroke="rgba(245,158,11,0.4)" stroke-width="1.5"/>
+      <text x="859" y="303" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="600">标准化评估 (6指标)</text>
+      <text x="859" y="320" text-anchor="middle" fill="#d97706" font-size="9">CT · TW · KNN · NMSE · Cosine · Kendall</text>
+
+      <!-- Quality Gates annotation -->
+      <rect x="444" y="180" width="120" height="44" rx="8" fill="rgba(245,158,11,0.1)" stroke="rgba(245,158,11,0.25)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="504" y="200" text-anchor="middle" fill="#fbbf24" font-size="9">SINR / Energy / PMI</text>
+      <text x="504" y="214" text-anchor="middle" fill="#fbbf24" font-size="9">Quality Gates [0.7, 1.0]</text>
+      <line x1="504" y1="148" x2="504" y2="180" stroke="rgba(245,158,11,0.3)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- Contract annotation -->
+      <rect x="244" y="170" width="150" height="36" rx="8" fill="rgba(139,92,246,0.08)" stroke="rgba(139,92,246,0.2)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="319" y="192" text-anchor="middle" fill="#a78bfa" font-size="9">Pydantic v2 数据合约校验</text>
+      <line x1="319" y1="148" x2="319" y2="170" stroke="rgba(139,92,246,0.2)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <defs>
+        <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#60a5fa"/>
+        </marker>
+      </defs>
+    </svg>
+    <div class="svg-title">端到端数据流：三源采集 → 统一合约 → 特征提取 → 模型训练 → 标准化评估</div>
+  </div>
+
+  <!-- Tech Stack Layers -->
+  <div class="reveal reveal-delay-2 mt-32">
+    <h3 style="font-size:1rem; color:#94a3b8; margin-bottom:16px;">技术栈分层</h3>
+    <div class="arch-diagram">
+      <div class="arch-row">
+        <div class="arch-box arch-box--blue" style="min-width:100%">
+          <strong>Frontend</strong> &nbsp;·&nbsp; React 18 + TypeScript + Ant Design + Plotly &nbsp;·&nbsp; 14 路由页面
+        </div>
+      </div>
+      <div class="arch-arrow--down">&#x2193;</div>
+      <div class="arch-row">
+        <div class="arch-box arch-box--green" style="min-width:100%">
+          <strong>Backend</strong> &nbsp;·&nbsp; FastAPI + SQLAlchemy + SQLite &nbsp;·&nbsp; RESTful API + 线程 Worker
+        </div>
+      </div>
+      <div class="arch-arrow--down">&#x2193;</div>
+      <div class="arch-row">
+        <div class="arch-box arch-box--purple" style="min-width:48%">
+          <strong>ML Core</strong> &nbsp;·&nbsp; PyTorch + Hydra Config
+        </div>
+        <div class="arch-box arch-box--amber" style="min-width:48%">
+          <strong>Sim Engine</strong> &nbsp;·&nbsp; Sionna + MATLAB + NumPy
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 4. DATA SOURCES ========================= -->
+<section id="sources">
+  <div class="reveal">
+    <div class="section-label">Data Sources</div>
+    <h2 class="section-title">三源融合的数据工厂</h2>
+    <p class="section-desc">每种数据源各有所长，平台通过统一的 ChannelSample 合约让三者无缝互通。</p>
+  </div>
+
+  <div class="data-table-wrap reveal reveal-delay-1">
+    <table>
+      <thead>
+        <tr>
+          <th>维度</th>
+          <th style="color:#93c5fd">Internal Sim (Python TDL)</th>
+          <th style="color:#fcd34d">Sionna RT (射线追踪)</th>
+          <th style="color:#86efac">QuaDRiGa Real (MATLAB)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>物理保真度</strong></td>
+          <td>中 — 统计信道 (3GPP TDL)</td>
+          <td>高 — 几何射线追踪</td>
+          <td>最高 — 空间一致性信道</td>
+        </tr>
+        <tr>
+          <td><strong>生成速度</strong></td>
+          <td class="highlight--green">最快 (纯 Python/NumPy)</td>
+          <td>慢 (GPU 光线计算)</td>
+          <td>中等 (MATLAB Engine)</td>
+        </tr>
+        <tr>
+          <td><strong>场景覆盖</strong></td>
+          <td>UMa, UMi, InF, RMa, HSR</td>
+          <td>自定义 3D 场景</td>
+          <td>UMa, UMi, InF, RMa</td>
+        </tr>
+        <tr>
+          <td><strong>干扰建模</strong></td>
+          <td>TDL 多小区叠加</td>
+          <td>RT + TDL 混合回退</td>
+          <td>空间一致性多小区</td>
+        </tr>
+        <tr>
+          <td><strong>移动性</strong></td>
+          <td>Jakes 时域相关 (F-008)</td>
+          <td>轨迹连续 + RT快照</td>
+          <td>4种移动模式</td>
+        </tr>
+        <tr>
+          <td><strong>路损模型</strong></td>
+          <td>3GPP 38.901 §7.4.1</td>
+          <td>射线路径衰减</td>
+          <td>QuaDRiGa 内置</td>
+        </tr>
+        <tr>
+          <td><strong>核心实现</strong></td>
+          <td><code>internal_sim.py</code></td>
+          <td><code>sionna_rt.py</code></td>
+          <td><code>quadriga_real.py</code> + <code>main_multi.m</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Source deep dive cards -->
+  <div class="card-grid card-grid--3 mt-32">
+    <div class="card reveal reveal-delay-1">
+      <h3 style="color:#93c5fd">Internal Sim 亮点</h3>
+      <p>完全 Python 原生实现的 3GPP TDL 信道生成器，支持 Jakes Sum-of-Sinusoids 时域相关模型。
+        相邻快照自相关从 <span class="highlight--red" style="color:#f87171">0.13</span> 提升至
+        <span class="highlight--green">0.88</span>（F-008 修复），真实还原移动场景的衰落特性。</p>
+      <div class="code-block mt-16">
+        <span class="lang-label">Python</span>
+        <code><span class="cm"># Jakes SoS: 连续时间轴实现时域相关</span>
+t_axis = t_offset_s + np.arange(T) * T_sym
+<span class="kw">for</span> n <span class="kw">in</span> range(N_sinusoids):
+    phase += A_n * np.cos(<span class="num">2</span>*np.pi*f_d*t_axis*cos_theta_n + phi_n)</code>
+      </div>
+    </div>
+
+    <div class="card reveal reveal-delay-2">
+      <h3 style="color:#fcd34d">Sionna RT 亮点</h3>
+      <p>射线追踪提供最精确的空间传播特性，但当遮挡严重时 RT 可能返回全零信道。
+        平台实现了智能回退策略（F-006）：优先复用上一成功快照，仅首帧无历史时才降级到 TDL，
+        保持时间序列连续性。</p>
+      <div class="code-block mt-16">
+        <span class="lang-label">Python</span>
+        <code><span class="kw">if</span> last_rt_channels <span class="kw">is not</span> <span class="const">None</span>:
+    h_all = last_rt_channels  <span class="cm"># 复用上一成功快照</span>
+<span class="kw">else</span>:
+    h_all = _compute_channels_tdl(...)  <span class="cm"># 仅首帧降级</span></code>
+      </div>
+    </div>
+
+    <div class="card reveal reveal-delay-3">
+      <h3 style="color:#86efac">QuaDRiGa Real 亮点</h3>
+      <p>通过 MATLAB Engine 直接调用 QuaDRiGa 仿真核心，1600+ 行 MATLAB 管线覆盖拓扑生成、
+        多小区信道、UL/DL 干扰注入。自包含部署（F-014），无需外部硬编码路径，
+        开箱即用。</p>
+      <div class="code-block mt-16">
+        <span class="lang-label">MATLAB</span>
+        <code><span class="cm">% 零速度保护：防止 QuaDRiGa 插值 Inf 崩溃</span>
+s1.set_speed(max(ue_speed_kmh, <span class="num">1e-3</span>), T_snapshots);
+<span class="cm">% 快照不足时复制首帧填充</span>
+<span class="kw">if</span> actual_ss < no_ss
+    Hf_temp = repmat(Hf_temp(:,:,:,<span class="num">1</span>), [<span class="num">1 1 1</span> no_ss]);
+<span class="kw">end</span></code>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 5. WORKFLOW / UI DEMO ========================= -->
+<section id="workflow">
+  <div class="reveal">
+    <div class="section-label">Workflow</div>
+    <h2 class="section-title">平台操作全流程</h2>
+    <p class="section-desc">四步完成从数据采集到模型评估的全链路操作，前端界面引导式交互。</p>
+  </div>
+
+  <!-- Step indicator -->
+  <div class="steps reveal">
+    <div class="step-item"><div class="step-num active">1</div><div class="step-label">数据采集</div></div>
+    <div class="step-line"></div>
+    <div class="step-item"><div class="step-num">2</div><div class="step-label">特征处理</div></div>
+    <div class="step-line"></div>
+    <div class="step-item"><div class="step-num">3</div><div class="step-label">模型管理</div></div>
+    <div class="step-line"></div>
+    <div class="step-item"><div class="step-num">4</div><div class="step-label">评估分析</div></div>
+  </div>
+
+  <!-- STEP 1: Collection Wizard -->
+  <div class="reveal mt-32">
+    <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:16px;">
+      <span class="tag">Step 1</span> &nbsp;数据采集向导 (CollectWizard)
+    </h3>
+    <div class="ui-mockup">
+      <div class="ui-mockup-header">
+        <div class="ui-dot ui-dot--r"></div>
+        <div class="ui-dot ui-dot--y"></div>
+        <div class="ui-dot ui-dot--g"></div>
+        <div class="ui-mockup-title">MSG Platform — 数据采集</div>
+      </div>
+      <div class="ui-mockup-body">
+        <svg viewBox="0 0 900 440" xmlns="http://www.w3.org/2000/svg">
+          <!-- Step indicator -->
+          <circle cx="150" cy="30" r="14" fill="#3b82f6" stroke="none"/>
+          <text x="150" y="35" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">0</text>
+          <text x="150" y="55" text-anchor="middle" fill="#94a3b8" font-size="10">数据来源</text>
+          <line x1="170" y1="30" x2="280" y2="30" stroke="rgba(59,130,246,0.3)" stroke-width="2"/>
+          <circle cx="300" cy="30" r="14" fill="none" stroke="rgba(59,130,246,0.3)" stroke-width="2"/>
+          <text x="300" y="35" text-anchor="middle" fill="#60a5fa" font-size="11">1</text>
+          <text x="300" y="55" text-anchor="middle" fill="#64748b" font-size="10">组网配置</text>
+          <line x1="320" y1="30" x2="430" y2="30" stroke="rgba(59,130,246,0.15)" stroke-width="2"/>
+          <circle cx="450" cy="30" r="14" fill="none" stroke="rgba(59,130,246,0.15)" stroke-width="2"/>
+          <text x="450" y="35" text-anchor="middle" fill="#475569" font-size="11">2</text>
+          <text x="450" y="55" text-anchor="middle" fill="#475569" font-size="10">信道配置</text>
+          <line x1="470" y1="30" x2="580" y2="30" stroke="rgba(59,130,246,0.15)" stroke-width="2"/>
+          <circle cx="600" cy="30" r="14" fill="none" stroke="rgba(59,130,246,0.15)" stroke-width="2"/>
+          <text x="600" y="35" text-anchor="middle" fill="#475569" font-size="11">3</text>
+          <text x="600" y="55" text-anchor="middle" fill="#475569" font-size="10">确认提交</text>
+
+          <!-- Source cards -->
+          <!-- Card 1: QuaDRiGa Real -->
+          <rect x="40" y="85" width="185" height="140" rx="10" fill="rgba(15,23,42,0.6)" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>
+          <circle cx="132" cy="125" r="20" fill="rgba(59,130,246,0.1)"/>
+          <text x="132" y="130" text-anchor="middle" fill="#60a5fa" font-size="16">&#x1F52C;</text>
+          <text x="132" y="160" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600">QuaDRiGa Real</text>
+          <text x="132" y="178" text-anchor="middle" fill="#64748b" font-size="9">MATLAB 空间一致性</text>
+          <text x="132" y="192" text-anchor="middle" fill="#64748b" font-size="9">物理保真度最高</text>
+
+          <!-- Card 2: Sionna RT (selected) -->
+          <rect x="245" y="85" width="185" height="140" rx="10" fill="rgba(15,23,42,0.6)" stroke="rgba(245,158,11,0.4)" stroke-width="2"/>
+          <circle cx="337" cy="125" r="20" fill="rgba(245,158,11,0.1)"/>
+          <text x="337" y="130" text-anchor="middle" fill="#fbbf24" font-size="16">&#x1F3AF;</text>
+          <text x="337" y="160" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600">Sionna RT</text>
+          <text x="337" y="178" text-anchor="middle" fill="#64748b" font-size="9">GPU 射线追踪</text>
+          <text x="337" y="192" text-anchor="middle" fill="#64748b" font-size="9">3D 场景建模</text>
+
+          <!-- Card 3: Python 内置 (selected with check) -->
+          <rect x="450" y="85" width="185" height="140" rx="10" fill="rgba(34,197,94,0.06)" stroke="rgba(34,197,94,0.4)" stroke-width="2"/>
+          <circle cx="542" cy="125" r="20" fill="rgba(34,197,94,0.1)"/>
+          <text x="542" y="130" text-anchor="middle" fill="#4ade80" font-size="16">&#x26A1;</text>
+          <text x="542" y="160" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600">Python 内置仿真</text>
+          <text x="542" y="178" text-anchor="middle" fill="#64748b" font-size="9">3GPP TDL + 38.901</text>
+          <text x="542" y="192" text-anchor="middle" fill="#64748b" font-size="9">速度最快·零依赖</text>
+          <!-- Checkmark -->
+          <circle cx="612" cy="98" r="10" fill="#4ade80"/>
+          <text x="612" y="103" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">&#x2713;</text>
+
+          <!-- Card 4: Upload (disabled) -->
+          <rect x="655" y="85" width="185" height="140" rx="10" fill="rgba(15,23,42,0.3)" stroke="rgba(255,255,255,0.04)" stroke-width="1" opacity="0.55"/>
+          <circle cx="747" cy="125" r="20" fill="rgba(255,255,255,0.03)"/>
+          <text x="747" y="130" text-anchor="middle" fill="#475569" font-size="16">&#x1F4E4;</text>
+          <text x="747" y="160" text-anchor="middle" fill="#64748b" font-size="12" font-weight="600">内部数据上传</text>
+          <text x="747" y="178" text-anchor="middle" fill="#475569" font-size="9">Coming Soon</text>
+
+          <!-- Preset cards row -->
+          <text x="40" y="260" fill="#94a3b8" font-size="11" font-weight="600">场景预设</text>
+          <rect x="40" y="272" width="130" height="65" rx="8" fill="rgba(59,130,246,0.06)" stroke="rgba(59,130,246,0.3)" stroke-width="1.5"/>
+          <text x="105" y="296" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">UMa 64T</text>
+          <text x="105" y="314" text-anchor="middle" fill="#64748b" font-size="9">3.5GHz · 7站 · 100MHz</text>
+          <text x="105" y="328" text-anchor="middle" fill="#60a5fa" font-size="8">64T64R · 蜂窝</text>
+
+          <rect x="180" y="272" width="130" height="65" rx="8" fill="rgba(15,23,42,0.4)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+          <text x="245" y="296" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">UMi 32T</text>
+          <text x="245" y="314" text-anchor="middle" fill="#64748b" font-size="9">3.5GHz · 4站 · 40MHz</text>
+          <text x="245" y="328" text-anchor="middle" fill="#64748b" font-size="8">32T32R · 蜂窝</text>
+
+          <rect x="320" y="272" width="130" height="65" rx="8" fill="rgba(15,23,42,0.4)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+          <text x="385" y="296" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">InH 8T</text>
+          <text x="385" y="314" text-anchor="middle" fill="#64748b" font-size="9">3.5GHz · 2站 · 20MHz</text>
+          <text x="385" y="328" text-anchor="middle" fill="#64748b" font-size="8">8T8R · 室内工厂</text>
+
+          <rect x="460" y="272" width="130" height="65" rx="8" fill="rgba(15,23,42,0.4)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+          <text x="525" y="296" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">HSR 350km/h</text>
+          <text x="525" y="314" text-anchor="middle" fill="#64748b" font-size="9">2.6GHz · 线性 · 50MHz</text>
+          <text x="525" y="328" text-anchor="middle" fill="#fa541c" font-size="8">高铁全链路</text>
+
+          <rect x="600" y="272" width="130" height="65" rx="8" fill="rgba(15,23,42,0.4)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+          <text x="665" y="296" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">mmWave 28G</text>
+          <text x="665" y="314" text-anchor="middle" fill="#64748b" font-size="9">28GHz · 3站 · 400MHz</text>
+          <text x="665" y="328" text-anchor="middle" fill="#a78bfa" font-size="8">毫米波宽带</text>
+
+          <!-- Right side: topology preview -->
+          <rect x="750" y="272" width="130" height="160" rx="8" fill="rgba(15,23,42,0.5)" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+          <text x="815" y="290" text-anchor="middle" fill="#94a3b8" font-size="9">拓扑预览</text>
+          <!-- Mini hex grid -->
+          <polygon points="815,310 835,322 835,346 815,358 795,346 795,322" fill="none" stroke="rgba(22,119,255,0.25)" stroke-width="1"/>
+          <polygon points="815,358 835,370 835,394 815,406 795,394 795,370" fill="none" stroke="rgba(22,119,255,0.25)" stroke-width="1"/>
+          <polygon points="845,334 865,346 865,370 845,382 825,370 825,346" fill="none" stroke="rgba(22,119,255,0.25)" stroke-width="1"/>
+          <circle cx="815" cy="338" r="5" fill="#3b82f6"/>
+          <circle cx="815" cy="382" r="5" fill="#f97316"/>
+          <circle cx="845" cy="358" r="5" fill="#22c55e"/>
+          <circle cx="808" cy="350" r="2" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="825" cy="365" r="2" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="838" cy="345" r="2" fill="#94a3b8" opacity="0.5"/>
+
+          <!-- Bottom button -->
+          <rect x="760" y="358" width="80" height="28" rx="6" fill="#3b82f6"/>
+          <text x="800" y="376" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">下一步 &#x2192;</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Topology Visualization -->
+  <div class="two-col reveal mt-32">
+    <div>
+      <h3 style="color:#f1f5f9; font-size:1rem; margin-bottom:16px;">蜂窝组网拓扑 (Hexagonal)</h3>
+      <div class="svg-container">
+        <svg viewBox="0 0 420 360" xmlns="http://www.w3.org/2000/svg">
+          <!-- Hex cells -->
+          <polygon points="210,40 270,70 270,130 210,160 150,130 150,70" fill="rgba(22,119,255,0.04)" stroke="rgba(22,119,255,0.25)" stroke-width="1.5"/>
+          <polygon points="210,160 270,190 270,250 210,280 150,250 150,190" fill="rgba(22,119,255,0.04)" stroke="rgba(22,119,255,0.25)" stroke-width="1.5"/>
+          <polygon points="330,100 390,130 390,190 330,220 270,190 270,130" fill="rgba(22,119,255,0.04)" stroke="rgba(22,119,255,0.25)" stroke-width="1.5"/>
+          <polygon points="90,100 150,130 150,190 90,220 30,190 30,130" fill="rgba(22,119,255,0.04)" stroke="rgba(22,119,255,0.25)" stroke-width="1.5"/>
+          <polygon points="330,220 390,250 390,310 330,340 270,310 270,250" fill="rgba(22,119,255,0.04)" stroke="rgba(22,119,255,0.25)" stroke-width="1.5"/>
+          <polygon points="90,220 150,250 150,310 90,340 30,310 30,250" fill="rgba(22,119,255,0.04)" stroke="rgba(22,119,255,0.25)" stroke-width="1.5"/>
+
+          <!-- BS sites -->
+          <circle cx="210" cy="100" r="10" fill="#fff" stroke="#3b82f6" stroke-width="3"/>
+          <text x="210" y="104" text-anchor="middle" fill="#3b82f6" font-size="8" font-weight="700">0</text>
+          <circle cx="210" cy="220" r="10" fill="#fff" stroke="#f97316" stroke-width="3"/>
+          <text x="210" y="224" text-anchor="middle" fill="#f97316" font-size="8" font-weight="700">1</text>
+          <circle cx="330" cy="160" r="10" fill="#fff" stroke="#22c55e" stroke-width="3"/>
+          <text x="330" y="164" text-anchor="middle" fill="#22c55e" font-size="8" font-weight="700">2</text>
+          <circle cx="90" cy="160" r="10" fill="#fff" stroke="#a855f7" stroke-width="3"/>
+          <text x="90" y="164" text-anchor="middle" fill="#a855f7" font-size="8" font-weight="700">3</text>
+          <circle cx="330" cy="280" r="10" fill="#fff" stroke="#06b6d4" stroke-width="3"/>
+          <text x="330" y="284" text-anchor="middle" fill="#06b6d4" font-size="8" font-weight="700">4</text>
+          <circle cx="90" cy="280" r="10" fill="#fff" stroke="#ec4899" stroke-width="3"/>
+          <text x="90" y="284" text-anchor="middle" fill="#ec4899" font-size="8" font-weight="700">5</text>
+
+          <!-- Sector lines -->
+          <line x1="210" y1="100" x2="210" y2="60" stroke="rgba(59,130,246,0.3)" stroke-width="1" stroke-dasharray="4,3"/>
+          <line x1="210" y1="100" x2="240" y2="124" stroke="rgba(59,130,246,0.3)" stroke-width="1" stroke-dasharray="4,3"/>
+          <line x1="210" y1="100" x2="180" y2="124" stroke="rgba(59,130,246,0.3)" stroke-width="1" stroke-dasharray="4,3"/>
+
+          <!-- UE dots -->
+          <circle cx="195" cy="120" r="3" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="230" cy="135" r="3" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="250" cy="175" r="3" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="175" cy="190" r="3" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="280" cy="200" r="3" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="140" cy="175" r="3" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="310" cy="240" r="3" fill="#94a3b8" opacity="0.5"/>
+          <circle cx="130" cy="260" r="3" fill="#94a3b8" opacity="0.5"/>
+
+          <!-- Legend -->
+          <circle cx="310" cy="30" r="6" fill="#fff" stroke="#3b82f6" stroke-width="2"/>
+          <text x="322" y="34" fill="#94a3b8" font-size="9">基站 (BS)</text>
+          <circle cx="310" cy="50" r="3" fill="#94a3b8" opacity="0.5"/>
+          <text x="322" y="54" fill="#94a3b8" font-size="9">终端 (UE)</text>
+          <text x="310" y="75" fill="#64748b" font-size="8">ISD = 500m · 3扇区</text>
+        </svg>
+        <div class="svg-title">交互式蜂窝拓扑：支持拖拽基站/UE、滚轮缩放、12色区分</div>
+      </div>
+    </div>
+    <div>
+      <h3 style="color:#f1f5f9; font-size:1rem; margin-bottom:16px;">线性/高铁拓扑 (Linear/HSR)</h3>
+      <div class="svg-container">
+        <svg viewBox="0 0 420 360" xmlns="http://www.w3.org/2000/svg">
+          <!-- Track centerline -->
+          <line x1="40" y1="180" x2="390" y2="180" stroke="#fa541c" stroke-width="2" stroke-dasharray="8,4"/>
+          <text x="215" y="170" text-anchor="middle" fill="#fa541c" font-size="9" font-weight="600">轨道中心线</text>
+
+          <!-- Coverage circles -->
+          <circle cx="100" cy="120" r="80" fill="none" stroke="rgba(59,130,246,0.15)" stroke-width="1" stroke-dasharray="4,4"/>
+          <circle cx="230" cy="120" r="80" fill="none" stroke="rgba(245,158,11,0.15)" stroke-width="1" stroke-dasharray="4,4"/>
+          <circle cx="350" cy="120" r="80" fill="none" stroke="rgba(34,197,94,0.15)" stroke-width="1" stroke-dasharray="4,4"/>
+
+          <!-- BS towers -->
+          <circle cx="100" cy="120" r="10" fill="#fff" stroke="#3b82f6" stroke-width="3"/>
+          <text x="100" y="124" text-anchor="middle" fill="#3b82f6" font-size="8" font-weight="700">0</text>
+          <text x="100" y="105" text-anchor="middle" fill="#93c5fd" font-size="8">BS 0</text>
+          <circle cx="230" cy="120" r="10" fill="#fff" stroke="#f97316" stroke-width="3"/>
+          <text x="230" y="124" text-anchor="middle" fill="#f97316" font-size="8" font-weight="700">1</text>
+          <text x="230" y="105" text-anchor="middle" fill="#fcd34d" font-size="8">BS 1</text>
+          <circle cx="350" cy="120" r="10" fill="#fff" stroke="#22c55e" stroke-width="3"/>
+          <text x="350" y="124" text-anchor="middle" fill="#22c55e" font-size="8" font-weight="700">2</text>
+          <text x="350" y="105" text-anchor="middle" fill="#86efac" font-size="8">BS 2</text>
+
+          <!-- Train outline -->
+          <rect x="120" y="190" width="140" height="40" rx="6" fill="none" stroke="#fa541c" stroke-width="1.5" stroke-dasharray="5,3"/>
+          <text x="190" y="215" text-anchor="middle" fill="#fa541c" font-size="14">&#x1F684; 列车</text>
+          <text x="190" y="240" text-anchor="middle" fill="#64748b" font-size="9">350 km/h · 穿透损耗 24 dB</text>
+
+          <!-- UEs in train -->
+          <circle cx="150" cy="205" r="3" fill="#94a3b8" opacity="0.6"/>
+          <circle cx="175" cy="210" r="3" fill="#94a3b8" opacity="0.6"/>
+          <circle cx="200" cy="205" r="3" fill="#94a3b8" opacity="0.6"/>
+          <circle cx="225" cy="210" r="3" fill="#94a3b8" opacity="0.6"/>
+          <circle cx="240" cy="205" r="3" fill="#94a3b8" opacity="0.6"/>
+
+          <!-- Speed arrow -->
+          <line x1="270" y1="205" x2="330" y2="205" stroke="#fa541c" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <text x="300" y="200" text-anchor="middle" fill="#fa541c" font-size="9">v</text>
+
+          <!-- Coverage overlap label -->
+          <rect x="145" y="280" width="140" height="50" rx="8" fill="rgba(15,23,42,0.6)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+          <text x="215" y="300" text-anchor="middle" fill="#94a3b8" font-size="9">切换区域重叠</text>
+          <text x="215" y="316" text-anchor="middle" fill="#64748b" font-size="8">支持 Doppler 自适应 + LSP 空间相关</text>
+        </svg>
+        <div class="svg-title">高铁场景：线性基站部署、列车穿透损耗建模、速度自适应 Doppler</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 2: Data Processing -->
+  <div class="reveal mt-32">
+    <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:16px;">
+      <span class="tag tag--cyan">Step 2</span> &nbsp;Bridge 特征处理流水线
+    </h3>
+    <div class="ui-mockup">
+      <div class="ui-mockup-header">
+        <div class="ui-dot ui-dot--r"></div>
+        <div class="ui-dot ui-dot--y"></div>
+        <div class="ui-dot ui-dot--g"></div>
+        <div class="ui-mockup-title">MSG Platform — 数据处理</div>
+      </div>
+      <div class="ui-mockup-body">
+        <div class="arch-row" style="margin-bottom:24px">
+          <div class="arch-box arch-box--purple">ChannelSample<br><span style="font-size:0.7rem;opacity:0.7">[T,RB,BS,UE] complex64</span></div>
+          <span class="arch-arrow">&#x2192;</span>
+          <div class="arch-box arch-box--cyan">Bridge 特征提取<br><span style="font-size:0.7rem;opacity:0.7">SVD · DFT · PDP · RSRP</span></div>
+          <span class="arch-arrow">&#x2192;</span>
+          <div class="arch-box arch-box--pink">16 Tokens + 8 Gates<br><span style="font-size:0.7rem;opacity:0.7">[B, 16, 128] float32</span></div>
+          <span class="arch-arrow">&#x2192;</span>
+          <div class="arch-box arch-box--green">模型输入<br><span style="font-size:0.7rem;opacity:0.7">ChannelMAE ready</span></div>
+        </div>
+
+        <!-- Token table -->
+        <div class="data-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>Token 名称</th><th>形状</th><th>类型</th><th>来源</th><th>物理含义</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td><span class="tag tag--purple">0</span></td><td><code>pdp_crop</code></td><td>[1, 64]</td><td>float32</td><td>IFFT(H)</td><td>功率延迟谱 — 多径时延分布</td></tr>
+              <tr><td><span class="tag">1-4</span></td><td><code>srs_1 ~ srs_4</code></td><td>[1, 64]</td><td>complex64</td><td>SVD U 向量</td><td>空间特征 — 上行最优波束方向</td></tr>
+              <tr><td><span class="tag tag--green">5-8</span></td><td><code>pmi_1 ~ pmi_4</code></td><td>[1, 64]</td><td>complex64</td><td>SVD V<sup>H</sup> 向量</td><td>预编码 — 下行波束赋形权重</td></tr>
+              <tr><td><span class="tag tag--cyan">9-12</span></td><td><code>dft_1 ~ dft_4</code></td><td>[1, 64]</td><td>complex64</td><td>DFT 波束</td><td>角域能量 — Top-4 波束响应</td></tr>
+              <tr><td><span class="tag tag--amber">13-14</span></td><td><code>rsrp_srs, rsrp_cb</code></td><td>[1, 64]</td><td>float32</td><td>功率测量</td><td>参考信号功率 (SRS / 码本)</td></tr>
+              <tr><td><span class="tag tag--pink">15</span></td><td><code>cell_rsrp</code></td><td>[1, 16]</td><td>float32</td><td>SSB 测量</td><td>邻小区功率指纹</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3 & 4: Model & Eval -->
+  <div class="two-col reveal mt-32">
+    <div>
+      <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:16px;">
+        <span class="tag tag--green">Step 3</span> &nbsp;模型管理与排行榜
+      </h3>
+      <div class="card">
+        <p style="color:#94a3b8; font-size:0.88rem; margin-bottom:16px;">
+          上传 <code>.pt</code> 模型文件后，平台自动检查兼容性（token_dim, seq_len, latent_dim），
+          通过则加入模型仓库。排行榜按 KNN 一致性降序排列，顶部显示金/银/铜奖牌。
+        </p>
+        <div class="data-table-wrap">
+          <table>
+            <thead><tr><th>排名</th><th>Run ID</th><th>KNN Acc</th><th>NMSE (dB)</th><th>CT</th><th>TW</th></tr></thead>
+            <tbody>
+              <tr><td><span style="color:#fbbf24;font-weight:700">&#x1F947; 1</span></td><td><code>run_2025a</code></td><td>87.3%</td><td>-18.4</td><td>0.921</td><td>0.895</td></tr>
+              <tr><td><span style="color:#c0c0c0;font-weight:700">&#x1F948; 2</span></td><td><code>run_2024f</code></td><td>82.1%</td><td>-15.7</td><td>0.887</td><td>0.861</td></tr>
+              <tr><td><span style="color:#cd7f32;font-weight:700">&#x1F949; 3</span></td><td><code>run_2024e</code></td><td>79.8%</td><td>-14.2</td><td>0.854</td><td>0.832</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:16px;">
+        <span class="tag tag--amber">Step 4</span> &nbsp;信道浏览与分析
+      </h3>
+      <div class="card">
+        <p style="color:#94a3b8; font-size:0.88rem; margin-bottom:16px;">
+          信道浏览器（ChannelExplorer）展示每个样本的理想信道、估计信道和误差热力图。
+          蓝→白→红渐变直观呈现信道矩阵幅度分布，配合 Plotly 交互式特征图展示 16 个 Token 的提取结果。
+        </p>
+        <!-- Mini heatmap visualization -->
+        <svg viewBox="0 0 380 120" xmlns="http://www.w3.org/2000/svg">
+          <!-- H_ideal -->
+          <text x="60" y="14" text-anchor="middle" fill="#94a3b8" font-size="9">|H<tspan baseline-shift="sub" font-size="7">ideal</tspan>|</text>
+          <rect x="10" y="20" width="100" height="80" rx="4" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+          <rect x="12" y="22" width="12" height="10" rx="1" fill="#1a3a8a"/><rect x="26" y="22" width="12" height="10" rx="1" fill="#3060c0"/>
+          <rect x="40" y="22" width="12" height="10" rx="1" fill="#6090e0"/><rect x="54" y="22" width="12" height="10" rx="1" fill="#a0b8f0"/>
+          <rect x="68" y="22" width="12" height="10" rx="1" fill="#ffffff"/><rect x="82" y="22" width="12" height="10" rx="1" fill="#f0a0a0"/>
+          <rect x="96" y="22" width="12" height="10" rx="1" fill="#d04040"/>
+          <rect x="12" y="34" width="12" height="10" rx="1" fill="#4070d0"/><rect x="26" y="34" width="12" height="10" rx="1" fill="#ffffff"/>
+          <rect x="40" y="34" width="12" height="10" rx="1" fill="#e08080"/><rect x="54" y="34" width="12" height="10" rx="1" fill="#c04040"/>
+          <rect x="68" y="34" width="12" height="10" rx="1" fill="#8030a0"/><rect x="82" y="34" width="12" height="10" rx="1" fill="#4070d0"/>
+          <rect x="96" y="34" width="12" height="10" rx="1" fill="#2050b0"/>
+          <rect x="12" y="46" width="12" height="10" rx="1" fill="#d06060"/><rect x="26" y="46" width="12" height="10" rx="1" fill="#a04040"/>
+          <rect x="40" y="46" width="12" height="10" rx="1" fill="#3060c0"/><rect x="54" y="46" width="12" height="10" rx="1" fill="#1a3a8a"/>
+          <rect x="68" y="46" width="12" height="10" rx="1" fill="#6090e0"/><rect x="82" y="46" width="12" height="10" rx="1" fill="#ffffff"/>
+          <rect x="96" y="46" width="12" height="10" rx="1" fill="#c04040"/>
+
+          <!-- H_est -->
+          <text x="200" y="14" text-anchor="middle" fill="#94a3b8" font-size="9">|H<tspan baseline-shift="sub" font-size="7">est</tspan>|</text>
+          <rect x="145" y="20" width="100" height="80" rx="4" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+          <rect x="147" y="22" width="12" height="10" rx="1" fill="#1a3a8a"/><rect x="161" y="22" width="12" height="10" rx="1" fill="#3060c0"/>
+          <rect x="175" y="22" width="12" height="10" rx="1" fill="#5580d8"/><rect x="189" y="22" width="12" height="10" rx="1" fill="#a0b8f0"/>
+          <rect x="203" y="22" width="12" height="10" rx="1" fill="#f0e8e8"/><rect x="217" y="22" width="12" height="10" rx="1" fill="#e89898"/>
+          <rect x="231" y="22" width="12" height="10" rx="1" fill="#c83838"/>
+
+          <!-- Error -->
+          <text x="330" y="14" text-anchor="middle" fill="#94a3b8" font-size="9">|Error|</text>
+          <rect x="280" y="20" width="100" height="80" rx="4" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+          <rect x="282" y="22" width="12" height="10" rx="1" fill="#1a2a40"/><rect x="296" y="22" width="12" height="10" rx="1" fill="#1a2a40"/>
+          <rect x="310" y="22" width="12" height="10" rx="1" fill="#203050"/><rect x="324" y="22" width="12" height="10" rx="1" fill="#1a2a40"/>
+          <rect x="338" y="22" width="12" height="10" rx="1" fill="#2a4060"/><rect x="352" y="22" width="12" height="10" rx="1" fill="#203050"/>
+          <rect x="366" y="22" width="12" height="10" rx="1" fill="#1a2a40"/>
+
+          <!-- Color bar -->
+          <defs><linearGradient id="heatGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#1a3a8a"/><stop offset="50%" stop-color="#ffffff"/><stop offset="100%" stop-color="#d04040"/></linearGradient></defs>
+          <rect x="120" y="108" width="140" height="6" rx="3" fill="url(#heatGrad)"/>
+          <text x="120" y="118" fill="#64748b" font-size="7" dominant-baseline="hanging">低</text>
+          <text x="260" y="118" fill="#64748b" font-size="7" dominant-baseline="hanging" text-anchor="end">高</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 6. 16-TOKEN ARCHITECTURE ========================= -->
+<section id="tokens">
+  <div class="reveal">
+    <div class="section-label">Token Architecture</div>
+    <h2 class="section-title">16-Token 特征架构</h2>
+    <p class="section-desc">将 5G NR 信道的多维物理特性压缩为 16 个标准化 Token，配合 8 个质量门控信号，构成模型的统一输入格式。</p>
+  </div>
+
+  <!-- Token visual strip -->
+  <div class="svg-container reveal reveal-delay-1">
+    <svg viewBox="0 0 1000 380" xmlns="http://www.w3.org/2000/svg">
+      <!-- Token blocks -->
+      <!-- PDP -->
+      <rect x="20" y="30" width="54" height="100" rx="8" fill="rgba(139,92,246,0.15)" stroke="rgba(139,92,246,0.4)" stroke-width="1.5"/>
+      <text x="47" y="55" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="700">T0</text>
+      <text x="47" y="72" text-anchor="middle" fill="#a78bfa" font-size="8">PDP</text>
+      <text x="47" y="86" text-anchor="middle" fill="#7c3aed" font-size="7">[1,64]</text>
+      <text x="47" y="100" text-anchor="middle" fill="#7c3aed" font-size="7">float32</text>
+      <text x="47" y="118" text-anchor="middle" fill="#7c3aed" font-size="7">IFFT(H)</text>
+
+      <!-- SRS 1-4 -->
+      <rect x="84" y="30" width="230" height="100" rx="8" fill="rgba(59,130,246,0.12)" stroke="rgba(59,130,246,0.3)" stroke-width="1.5"/>
+      <text x="199" y="20" text-anchor="middle" fill="#60a5fa" font-size="9" font-weight="600">空间特征 (UL)</text>
+      <rect x="94" y="42" width="48" height="36" rx="5" fill="rgba(59,130,246,0.15)"/>
+      <text x="118" y="56" text-anchor="middle" fill="#93c5fd" font-size="9" font-weight="600">T1</text>
+      <text x="118" y="72" text-anchor="middle" fill="#60a5fa" font-size="7">SRS₁</text>
+      <rect x="148" y="42" width="48" height="36" rx="5" fill="rgba(59,130,246,0.15)"/>
+      <text x="172" y="56" text-anchor="middle" fill="#93c5fd" font-size="9" font-weight="600">T2</text>
+      <text x="172" y="72" text-anchor="middle" fill="#60a5fa" font-size="7">SRS₂</text>
+      <rect x="202" y="42" width="48" height="36" rx="5" fill="rgba(59,130,246,0.15)"/>
+      <text x="226" y="56" text-anchor="middle" fill="#93c5fd" font-size="9" font-weight="600">T3</text>
+      <text x="226" y="72" text-anchor="middle" fill="#60a5fa" font-size="7">SRS₃</text>
+      <rect x="256" y="42" width="48" height="36" rx="5" fill="rgba(59,130,246,0.15)"/>
+      <text x="280" y="56" text-anchor="middle" fill="#93c5fd" font-size="9" font-weight="600">T4</text>
+      <text x="280" y="72" text-anchor="middle" fill="#60a5fa" font-size="7">SRS₄</text>
+      <text x="199" y="100" text-anchor="middle" fill="#3b82f6" font-size="7">SVD U 向量 · complex64 · [1,64]</text>
+      <text x="199" y="118" text-anchor="middle" fill="#3b82f6" font-size="7">上行波束方向 (Rank 1~4)</text>
+
+      <!-- PMI 5-8 -->
+      <rect x="324" y="30" width="230" height="100" rx="8" fill="rgba(34,197,94,0.12)" stroke="rgba(34,197,94,0.3)" stroke-width="1.5"/>
+      <text x="439" y="20" text-anchor="middle" fill="#4ade80" font-size="9" font-weight="600">预编码特征 (DL)</text>
+      <rect x="334" y="42" width="48" height="36" rx="5" fill="rgba(34,197,94,0.12)"/>
+      <text x="358" y="56" text-anchor="middle" fill="#86efac" font-size="9" font-weight="600">T5</text>
+      <text x="358" y="72" text-anchor="middle" fill="#4ade80" font-size="7">PMI₁</text>
+      <rect x="388" y="42" width="48" height="36" rx="5" fill="rgba(34,197,94,0.12)"/>
+      <text x="412" y="56" text-anchor="middle" fill="#86efac" font-size="9" font-weight="600">T6</text>
+      <text x="412" y="72" text-anchor="middle" fill="#4ade80" font-size="7">PMI₂</text>
+      <rect x="442" y="42" width="48" height="36" rx="5" fill="rgba(34,197,94,0.12)"/>
+      <text x="466" y="56" text-anchor="middle" fill="#86efac" font-size="9" font-weight="600">T7</text>
+      <text x="466" y="72" text-anchor="middle" fill="#4ade80" font-size="7">PMI₃</text>
+      <rect x="496" y="42" width="48" height="36" rx="5" fill="rgba(34,197,94,0.12)"/>
+      <text x="520" y="56" text-anchor="middle" fill="#86efac" font-size="9" font-weight="600">T8</text>
+      <text x="520" y="72" text-anchor="middle" fill="#4ade80" font-size="7">PMI₄</text>
+      <text x="439" y="100" text-anchor="middle" fill="#16a34a" font-size="7">SVD V<tspan baseline-shift="super" font-size="5">H</tspan> 向量 · complex64 · [1,64]</text>
+      <text x="439" y="118" text-anchor="middle" fill="#16a34a" font-size="7">下行波束赋形权重 (Rank 1~4)</text>
+
+      <!-- DFT 9-12 -->
+      <rect x="564" y="30" width="230" height="100" rx="8" fill="rgba(6,182,212,0.12)" stroke="rgba(6,182,212,0.3)" stroke-width="1.5"/>
+      <text x="679" y="20" text-anchor="middle" fill="#22d3ee" font-size="9" font-weight="600">角域特征</text>
+      <rect x="574" y="42" width="48" height="36" rx="5" fill="rgba(6,182,212,0.12)"/>
+      <text x="598" y="56" text-anchor="middle" fill="#67e8f9" font-size="9" font-weight="600">T9</text>
+      <text x="598" y="72" text-anchor="middle" fill="#22d3ee" font-size="7">DFT₁</text>
+      <rect x="628" y="42" width="48" height="36" rx="5" fill="rgba(6,182,212,0.12)"/>
+      <text x="652" y="56" text-anchor="middle" fill="#67e8f9" font-size="9" font-weight="600">T10</text>
+      <text x="652" y="72" text-anchor="middle" fill="#22d3ee" font-size="7">DFT₂</text>
+      <rect x="682" y="42" width="48" height="36" rx="5" fill="rgba(6,182,212,0.12)"/>
+      <text x="706" y="56" text-anchor="middle" fill="#67e8f9" font-size="9" font-weight="600">T11</text>
+      <text x="706" y="72" text-anchor="middle" fill="#22d3ee" font-size="7">DFT₃</text>
+      <rect x="736" y="42" width="48" height="36" rx="5" fill="rgba(6,182,212,0.12)"/>
+      <text x="760" y="56" text-anchor="middle" fill="#67e8f9" font-size="9" font-weight="600">T12</text>
+      <text x="760" y="72" text-anchor="middle" fill="#22d3ee" font-size="7">DFT₄</text>
+      <text x="679" y="100" text-anchor="middle" fill="#0891b2" font-size="7">DFT 波束响应 · complex64 · [1,64]</text>
+      <text x="679" y="118" text-anchor="middle" fill="#0891b2" font-size="7">Top-4 波束方向 (角域)</text>
+
+      <!-- RSRP 13-14 + Cell 15 -->
+      <rect x="804" y="30" width="75" height="100" rx="8" fill="rgba(245,158,11,0.12)" stroke="rgba(245,158,11,0.3)" stroke-width="1.5"/>
+      <text x="841" y="50" text-anchor="middle" fill="#fcd34d" font-size="9" font-weight="600">T13-14</text>
+      <text x="841" y="68" text-anchor="middle" fill="#fbbf24" font-size="7">RSRP</text>
+      <text x="841" y="82" text-anchor="middle" fill="#d97706" font-size="7">[1,64]</text>
+      <text x="841" y="96" text-anchor="middle" fill="#d97706" font-size="7">float32</text>
+      <text x="841" y="118" text-anchor="middle" fill="#d97706" font-size="7">功率测量</text>
+
+      <rect x="889" y="30" width="75" height="100" rx="8" fill="rgba(244,114,182,0.12)" stroke="rgba(244,114,182,0.3)" stroke-width="1.5"/>
+      <text x="926" y="50" text-anchor="middle" fill="#f9a8d4" font-size="9" font-weight="600">T15</text>
+      <text x="926" y="68" text-anchor="middle" fill="#f472b6" font-size="7">Cell RSRP</text>
+      <text x="926" y="82" text-anchor="middle" fill="#db2777" font-size="7">[1,16]</text>
+      <text x="926" y="96" text-anchor="middle" fill="#db2777" font-size="7">float32</text>
+      <text x="926" y="118" text-anchor="middle" fill="#db2777" font-size="7">邻区指纹</text>
+
+      <!-- Gate section -->
+      <text x="500" y="165" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="600">8 Quality Gates — 质量门控信号</text>
+
+      <!-- Gate boxes -->
+      <rect x="60" y="185" width="100" height="70" rx="8" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.2)" stroke-width="1"/>
+      <text x="110" y="205" text-anchor="middle" fill="#fcd34d" font-size="9" font-weight="600">G1~G4</text>
+      <text x="110" y="222" text-anchor="middle" fill="#fbbf24" font-size="8">srs_w₁~w₄</text>
+      <text x="110" y="240" text-anchor="middle" fill="#d97706" font-size="7">SVD 奇异值权重</text>
+
+      <rect x="180" y="185" width="100" height="70" rx="8" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.2)" stroke-width="1"/>
+      <text x="230" y="205" text-anchor="middle" fill="#fcd34d" font-size="9" font-weight="600">G5</text>
+      <text x="230" y="222" text-anchor="middle" fill="#fbbf24" font-size="8">srs_sinr</text>
+      <text x="230" y="240" text-anchor="middle" fill="#d97706" font-size="7">SINR dB [-20, 20]</text>
+
+      <rect x="300" y="185" width="100" height="70" rx="8" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.2)" stroke-width="1"/>
+      <text x="350" y="205" text-anchor="middle" fill="#fcd34d" font-size="9" font-weight="600">G6</text>
+      <text x="350" y="222" text-anchor="middle" fill="#fbbf24" font-size="8">srs_cb_sinr</text>
+      <text x="350" y="240" text-anchor="middle" fill="#d97706" font-size="7">码本 SINR</text>
+
+      <rect x="420" y="185" width="100" height="70" rx="8" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.2)" stroke-width="1"/>
+      <text x="470" y="205" text-anchor="middle" fill="#fcd34d" font-size="9" font-weight="600">G7</text>
+      <text x="470" y="222" text-anchor="middle" fill="#fbbf24" font-size="8">cqi</text>
+      <text x="470" y="240" text-anchor="middle" fill="#d97706" font-size="7">CQI (0~15)</text>
+
+      <!-- Gate mechanism -->
+      <rect x="580" y="185" width="380" height="70" rx="8" fill="rgba(139,92,246,0.08)" stroke="rgba(139,92,246,0.2)" stroke-width="1"/>
+      <text x="770" y="205" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="600">门控机制</text>
+      <text x="770" y="228" text-anchor="middle" fill="#a78bfa" font-size="11" font-family="Cambria Math, serif">gate = sigmoid(x) × 0.3 + 0.7</text>
+      <text x="770" y="248" text-anchor="middle" fill="#7c3aed" font-size="9">输出范围 [0.7, 1.0] — 软抑制低质量特征，永不完全屏蔽</text>
+
+      <!-- Connection arrows -->
+      <text x="500" y="290" text-anchor="middle" fill="#64748b" font-size="9">Gates 对 Token 进行逐元素加权：token_gated = token × gate</text>
+      <text x="500" y="310" text-anchor="middle" fill="#64748b" font-size="9">低 SINR → gate ≈ 0.7 (抑制噪声)&nbsp;&nbsp;|&nbsp;&nbsp;高 SINR → gate ≈ 1.0 (完全信任)</text>
+
+      <!-- Summary -->
+      <rect x="200" y="330" width="600" height="40" rx="10" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.15)" stroke-width="1"/>
+      <text x="500" y="355" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="600">最终模型输入: [Batch, 16, 128] float32 — 统一维度，跨源可比</text>
+    </svg>
+    <div class="svg-title">16 Token + 8 Gate 完整架构：每个 Token 对应明确的物理测量量，Gate 机制保证特征质量自适应</div>
+  </div>
+</section>
+
+<!-- ========================= 7. TECH DEEP DIVES ========================= -->
+<section id="tech-deep">
+  <div class="reveal">
+    <div class="section-label">Technical Deep Dives</div>
+    <h2 class="section-title">核心技术图解</h2>
+    <p class="section-desc">从 SRS 频率跳频到多小区干扰建模，从路损公式到信道估计 —— 深入代码级的技术细节。</p>
+  </div>
+
+  <!-- 7a: SRS Hopping -->
+  <div class="reveal mt-16">
+    <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:4px;">SRS 频率跳频 (3GPP 38.211 §6.4.1.4.3)</h3>
+    <p class="text-sm text-muted mb-16">通过带宽树分层跳频，SRS 在少量 Symbol 内覆盖全带宽，是信道探测的核心机制。</p>
+  </div>
+
+  <div class="two-col">
+    <div class="svg-container reveal reveal-delay-1">
+      <svg viewBox="0 0 440 320" xmlns="http://www.w3.org/2000/svg">
+        <!-- Bandwidth tree -->
+        <!-- Level 0 (root) -->
+        <rect x="120" y="10" width="200" height="32" rx="6" fill="rgba(59,130,246,0.15)" stroke="rgba(59,130,246,0.4)" stroke-width="1.5"/>
+        <text x="220" y="30" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="600">B_SRS=0 (全带宽) m₀=272 RB</text>
+
+        <!-- Level 1 -->
+        <line x1="170" y1="42" x2="110" y2="70" stroke="#475569" stroke-width="1"/>
+        <line x1="270" y1="42" x2="330" y2="70" stroke="#475569" stroke-width="1"/>
+        <rect x="40" y="70" width="140" height="28" rx="6" fill="rgba(139,92,246,0.12)" stroke="rgba(139,92,246,0.3)" stroke-width="1"/>
+        <text x="110" y="88" text-anchor="middle" fill="#c4b5fd" font-size="9">B_SRS=1 · m₁=136 · N₁=2</text>
+        <rect x="260" y="70" width="140" height="28" rx="6" fill="rgba(139,92,246,0.12)" stroke="rgba(139,92,246,0.3)" stroke-width="1"/>
+        <text x="330" y="88" text-anchor="middle" fill="#c4b5fd" font-size="9">B_SRS=1 · m₁=136 · N₁=2</text>
+
+        <!-- Level 2 -->
+        <line x1="80" y1="98" x2="55" y2="126" stroke="#475569" stroke-width="1"/>
+        <line x1="140" y1="98" x2="165" y2="126" stroke="#475569" stroke-width="1"/>
+        <line x1="300" y1="98" x2="275" y2="126" stroke="#475569" stroke-width="1"/>
+        <line x1="360" y1="98" x2="385" y2="126" stroke="#475569" stroke-width="1"/>
+        <rect x="10" y="126" width="90" height="24" rx="5" fill="rgba(6,182,212,0.12)" stroke="rgba(6,182,212,0.3)" stroke-width="1"/>
+        <text x="55" y="142" text-anchor="middle" fill="#67e8f9" font-size="8">B₂=2 · m₂=68</text>
+        <rect x="120" y="126" width="90" height="24" rx="5" fill="rgba(6,182,212,0.12)" stroke="rgba(6,182,212,0.3)" stroke-width="1"/>
+        <text x="165" y="142" text-anchor="middle" fill="#67e8f9" font-size="8">B₂=2 · m₂=68</text>
+        <rect x="230" y="126" width="90" height="24" rx="5" fill="rgba(6,182,212,0.12)" stroke="rgba(6,182,212,0.3)" stroke-width="1"/>
+        <text x="275" y="142" text-anchor="middle" fill="#67e8f9" font-size="8">B₂=2 · m₂=68</text>
+        <rect x="340" y="126" width="90" height="24" rx="5" fill="rgba(6,182,212,0.12)" stroke="rgba(6,182,212,0.3)" stroke-width="1"/>
+        <text x="385" y="142" text-anchor="middle" fill="#67e8f9" font-size="8">B₂=2 · m₂=68</text>
+
+        <!-- Hopping pattern -->
+        <text x="220" y="180" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="600">跳频序列示意 (4个时隙)</text>
+        <!-- Frequency grid -->
+        <rect x="30" y="195" width="90" height="24" rx="4" fill="rgba(59,130,246,0.3)" stroke="rgba(59,130,246,0.5)" stroke-width="1"/>
+        <text x="75" y="211" text-anchor="middle" fill="#fff" font-size="8" font-weight="600">Slot 0</text>
+        <rect x="30" y="195" width="90" height="24" rx="4" fill="rgba(59,130,246,0.25)"/>
+
+        <rect x="140" y="219" width="90" height="24" rx="4" fill="rgba(139,92,246,0.3)" stroke="rgba(139,92,246,0.5)" stroke-width="1"/>
+        <text x="185" y="235" text-anchor="middle" fill="#fff" font-size="8" font-weight="600">Slot 1</text>
+
+        <rect x="250" y="243" width="90" height="24" rx="4" fill="rgba(6,182,212,0.3)" stroke="rgba(6,182,212,0.5)" stroke-width="1"/>
+        <text x="295" y="259" text-anchor="middle" fill="#fff" font-size="8" font-weight="600">Slot 2</text>
+
+        <rect x="360" y="195" width="60" height="72" rx="4" fill="none" stroke="rgba(34,197,94,0.3)" stroke-width="1" stroke-dasharray="3,3"/>
+        <rect x="360" y="267" width="60" height="24" rx="4" fill="rgba(34,197,94,0.3)" stroke="rgba(34,197,94,0.5)" stroke-width="1"/>
+        <text x="390" y="283" text-anchor="middle" fill="#fff" font-size="8" font-weight="600">Slot 3</text>
+
+        <!-- Axis labels -->
+        <text x="15" y="255" text-anchor="end" fill="#64748b" font-size="8" transform="rotate(-90,15,255)">频率 &#x2191;</text>
+        <text x="220" y="305" text-anchor="middle" fill="#64748b" font-size="8">时间 &#x2192;</text>
+        <text x="220" y="318" text-anchor="middle" fill="#475569" font-size="7">cycle_length = N₁ × N₂ = 2 × 2 = 4 slots 覆盖全带宽</text>
+      </svg>
+      <div class="svg-title">SRS 带宽树分层跳频 — 4时隙完成全带宽探测</div>
+    </div>
+
+    <div class="reveal reveal-delay-2">
+      <div class="formula-block">
+        <span class="formula-label">SRS 频率起始位置</span>
+        <span class="formula">
+          <var class="var">k</var><sub>0</sub><sup>(p<sub>i</sub>)</sup> = <var class="var">k</var><sub>0,bar</sub> +
+          &Sigma;<sub><var class="var">b</var>=0</sub><sup><var class="var">B</var><sub>SRS</sub></sup>
+          <var class="var">K</var><sub>TC</sub> &middot; <var class="var">m</var><sub>SRS,b</sub> &middot; <var class="var">n</var><sub>b</sub>
+        </span>
+      </div>
+      <div class="formula-block">
+        <span class="formula-label">跳频索引 (b > b_hop)</span>
+        <span class="formula">
+          <var class="var">F</var><sub>b</sub>(<var class="var">n</var><sub>SRS</sub>) =
+          (<var class="var">n</var><sub>SRS</sub> / &Pi;<sub>b'=b<sub>hop</sub>+1</sub><sup>b-1</sup> <var class="var">N</var><sub>b'</sub>)
+          mod <var class="var">N</var><sub>b</sub>
+        </span>
+      </div>
+      <div class="formula-block">
+        <span class="formula-label">跳频周期</span>
+        <span class="formula">
+          Cycle = &Pi;<sub><var class="var">b</var>=b<sub>hop</sub>+1</sub><sup><var class="var">B</var><sub>SRS</sub></sup>
+          <var class="var">N</var><sub>b</sub>
+        </span>
+      </div>
+      <p class="text-sm text-muted mt-16">
+        平台完整实现了 3GPP TS 38.211 的 SRS 序列生成（Zadoff-Chu 基序列 + 循环移位）和频率跳频树结构。
+        <code>K_TC</code> 为梳齿因子（2/4/8），<code>B_SRS</code> 为带宽配置级数（0~3），
+        跳频通过 <code>F_b</code> 在每个时隙自动轮转频率位置。
+      </p>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- 7b: Interference Modeling -->
+  <div class="reveal">
+    <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:4px;">物理级干扰建模</h3>
+    <p class="text-sm text-muted mb-16">不是简单加高斯噪声等效 — 平台建模每个邻小区的独立信道、导频序列叠加和接收信号处理。</p>
+  </div>
+
+  <div class="two-col">
+    <div class="svg-container reveal reveal-delay-1">
+      <svg viewBox="0 0 440 350" xmlns="http://www.w3.org/2000/svg">
+        <!-- Serving cell -->
+        <circle cx="220" cy="170" r="60" fill="none" stroke="rgba(59,130,246,0.2)" stroke-width="1" stroke-dasharray="4,4"/>
+        <circle cx="220" cy="170" r="14" fill="#fff" stroke="#3b82f6" stroke-width="3"/>
+        <text x="220" y="175" text-anchor="middle" fill="#3b82f6" font-size="10" font-weight="700">S</text>
+        <text x="220" y="195" text-anchor="middle" fill="#93c5fd" font-size="8">服务小区</text>
+
+        <!-- UE -->
+        <circle cx="260" cy="200" r="8" fill="#3b82f6" opacity="0.8"/>
+        <text x="260" y="204" text-anchor="middle" fill="#fff" font-size="7" font-weight="600">UE</text>
+
+        <!-- Serving signal -->
+        <line x1="232" y1="178" x2="253" y2="196" stroke="#3b82f6" stroke-width="2"/>
+        <text x="235" y="180" fill="#60a5fa" font-size="7">h<tspan baseline-shift="sub" font-size="5">serv</tspan></text>
+
+        <!-- Interferer 1 -->
+        <circle cx="80" cy="80" r="12" fill="#fff" stroke="#f97316" stroke-width="2.5"/>
+        <text x="80" y="84" text-anchor="middle" fill="#f97316" font-size="9" font-weight="700">I₁</text>
+        <line x1="90" y1="88" x2="252" y2="196" stroke="#f97316" stroke-width="1" stroke-dasharray="4,3" opacity="0.6"/>
+        <text x="150" y="130" fill="#fbbf24" font-size="7" transform="rotate(-30,150,130)">h<tspan baseline-shift="sub" font-size="5">intf,1</tspan></text>
+
+        <!-- Interferer 2 -->
+        <circle cx="370" cy="70" r="12" fill="#fff" stroke="#22c55e" stroke-width="2.5"/>
+        <text x="370" y="74" text-anchor="middle" fill="#22c55e" font-size="9" font-weight="700">I₂</text>
+        <line x1="362" y1="80" x2="268" y2="196" stroke="#22c55e" stroke-width="1" stroke-dasharray="4,3" opacity="0.6"/>
+        <text x="325" y="125" fill="#4ade80" font-size="7" transform="rotate(25,325,125)">h<tspan baseline-shift="sub" font-size="5">intf,2</tspan></text>
+
+        <!-- Interferer 3 -->
+        <circle cx="100" cy="290" r="12" fill="#fff" stroke="#a855f7" stroke-width="2.5"/>
+        <text x="100" y="294" text-anchor="middle" fill="#a855f7" font-size="9" font-weight="700">I₃</text>
+        <line x1="110" y1="284" x2="254" y2="206" stroke="#a855f7" stroke-width="1" stroke-dasharray="4,3" opacity="0.6"/>
+
+        <!-- UL label -->
+        <rect x="290" y="155" width="140" height="50" rx="8" fill="rgba(15,23,42,0.7)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+        <text x="360" y="172" text-anchor="middle" fill="#fbbf24" font-size="8" font-weight="600">UL: 多 UE SRS 叠加</text>
+        <text x="360" y="186" text-anchor="middle" fill="#64748b" font-size="7">每邻区随机 [0, K] 个 UE</text>
+        <text x="360" y="198" text-anchor="middle" fill="#64748b" font-size="7">Zadoff-Chu 序列正交</text>
+
+        <!-- DL label -->
+        <rect x="290" y="220" width="140" height="50" rx="8" fill="rgba(15,23,42,0.7)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+        <text x="360" y="237" text-anchor="middle" fill="#4ade80" font-size="8" font-weight="600">DL: 多小区 CSI-RS 叠加</text>
+        <text x="360" y="251" text-anchor="middle" fill="#64748b" font-size="7">随机子集 [0, K-1] 小区</text>
+        <text x="360" y="263" text-anchor="middle" fill="#64748b" font-size="7">Gold-PRBS 序列</text>
+
+        <!-- Noise -->
+        <text x="220" y="330" text-anchor="middle" fill="#f87171" font-size="8">+ AWGN (per-RB bandwidth)</text>
+      </svg>
+      <div class="svg-title">多小区干扰模型 — 每个邻区建模独立信道+导频叠加</div>
+    </div>
+
+    <div class="reveal reveal-delay-2">
+      <div class="formula-block">
+        <span class="formula-label">UL 接收信号 (BS 端)</span>
+        <span class="formula">
+          <var class="var">Y</var> = <var class="var">h</var><sub>serv</sub> &middot; <var class="var">x</var><sub>SRS,serv</sub>
+          + &Sigma;<sub>k</sub> <var class="var">h</var><sub>intf,k</sub> &middot; <var class="var">x</var><sub>SRS,k</sub>
+          + <var class="var">n</var>
+        </span>
+      </div>
+      <div class="formula-block">
+        <span class="formula-label">SIR 计算</span>
+        <span class="formula">
+          SIR<sub>dB</sub> = 10 &middot; log<sub>10</sub>
+          (<var class="var">P</var><sub>serv</sub> / <var class="var">P</var><sub>intf</sub>),&nbsp;
+          clamped to [-50, 50] dB
+        </span>
+      </div>
+      <div class="formula-block">
+        <span class="formula-label">SINR (线性域)</span>
+        <span class="formula">
+          SINR = <var class="var">P</var><sub>serv</sub> /
+          (<var class="var">P</var><sub>intf</sub> + 2 &middot; <var class="var">P</var><sub>noise</sub>)
+        </span>
+      </div>
+      <div class="formula-block">
+        <span class="formula-label">噪声功率 (per-RB)</span>
+        <span class="formula">
+          <var class="var">P</var><sub>noise</sub> = <var class="var">kT</var> &middot; (12 &middot; SCS) + NF
+          <br><span style="font-size:0.8em;color:#f87171">&#x26A0; 非系统总带宽！F-003 修复关键点</span>
+        </span>
+      </div>
+      <p class="text-sm text-muted mt-16">
+        干扰建模的核心在于：每个邻小区有独立的物理信道 <code>h_intf,k</code>，干扰信号经过各自信道后在接收端叠加。
+        这比简单的 "SINR = SNR - X dB" 模型更接近真实系统，能产生有意义的空间干扰梯度。
+      </p>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- 7c: Channel Estimation -->
+  <div class="reveal">
+    <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:4px;">信道估计：LS vs MMSE</h3>
+    <p class="text-sm text-muted mb-16">平台同时支持最小二乘(LS)和最小均方误差(MMSE)两种信道估计模式，以及理想信道直通。</p>
+  </div>
+
+  <div class="two-col reveal">
+    <div>
+      <div class="formula-block">
+        <span class="formula-label">LS 信道估计 (Least Squares)</span>
+        <span class="formula">
+          <var class="var">H&#770;</var><sub>LS</sub>[k,r] =
+          (<var class="var">Y</var><sub>RS</sub>[k,r] &middot; <var class="var">X</var><sub>RS</sub><sup>*</sup>[k])
+          / (|<var class="var">X</var><sub>RS</sub>[k]|<sup>2</sup> + &epsilon;)
+        </span>
+      </div>
+      <p class="text-sm text-muted mt-8">
+        最简单的估计方式，直接用接收信号除以已知导频。无需信道统计先验，但噪声放大严重。
+        正则化常数 &epsilon; = 10<sup>-12</sup> 防止除零。
+      </p>
+    </div>
+    <div>
+      <div class="formula-block">
+        <span class="formula-label">MMSE 信道估计 (Wiener 滤波)</span>
+        <span class="formula">
+          <var class="var">H&#770;</var><sub>MMSE</sub> = <var class="var">R</var><sub>hh</sub> &middot;
+          (<var class="var">R</var><sub>hh</sub> + SNR<sup>-1</sup> &middot; <var class="var">I</var>)<sup>-1</sup>
+          &middot; <var class="var">H&#770;</var><sub>LS</sub>
+        </span>
+      </div>
+      <div class="formula-block mt-8">
+        <span class="formula-label">频域相关 (指数 PDP)</span>
+        <span class="formula">
+          <var class="var">R</var>[k,l] = 1 / (1 + j&middot;2&pi;&middot;(k-l)&middot;&Delta;f&middot;&tau;<sub>rms</sub>)
+        </span>
+      </div>
+      <p class="text-sm text-muted mt-8">
+        利用信道的频域相关性进行降噪滤波。空间协方差通过 IIR 时域平滑（&alpha;=0.2）估计。
+      </p>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- 7d: Path Loss -->
+  <div class="reveal">
+    <h3 style="color:#f1f5f9; font-size:1.1rem; margin-bottom:4px;">路径损耗模型 (3GPP 38.901)</h3>
+    <p class="text-sm text-muted mb-16">平台实现了完整的 3GPP 38.901 Table 7.4.1-1 路损模型，覆盖 UMa/UMi/InF 三大场景。</p>
+  </div>
+
+  <div class="card-grid card-grid--3 reveal">
+    <div class="card">
+      <h3 style="color:#93c5fd; font-size:0.95rem;">UMa NLOS</h3>
+      <div class="formula-block" style="padding:14px 18px;">
+        <span class="formula" style="font-size:0.9em;">
+          PL = <span class="const">13.54</span> + <span class="const">39.08</span>&middot;log<sub>10</sub>(<var class="var">d</var><sub>3d</sub>)
+          + <span class="const">20</span>&middot;log<sub>10</sub>(<var class="var">f</var><sub>c</sub>)
+          - <span class="const">0.6</span>&middot;(<var class="var">h</var><sub>UT</sub> - 1.5)
+        </span>
+      </div>
+      <p class="text-xs text-muted">&sigma;<sub>SF</sub> = 6 dB</p>
+    </div>
+    <div class="card">
+      <h3 style="color:#fcd34d; font-size:0.95rem;">UMi NLOS</h3>
+      <div class="formula-block" style="padding:14px 18px;">
+        <span class="formula" style="font-size:0.9em;">
+          PL = <span class="const">22.4</span> + <span class="const">35.3</span>&middot;log<sub>10</sub>(<var class="var">d</var><sub>3d</sub>)
+          + <span class="const">21.3</span>&middot;log<sub>10</sub>(<var class="var">f</var><sub>c</sub>)
+          - <span class="const">0.3</span>&middot;(<var class="var">h</var><sub>UT</sub> - 1.5)
+        </span>
+      </div>
+      <p class="text-xs text-muted">&sigma;<sub>SF</sub> = 7.82 dB</p>
+    </div>
+    <div class="card">
+      <h3 style="color:#86efac; font-size:0.95rem;">InF-SH NLOS</h3>
+      <div class="formula-block" style="padding:14px 18px;">
+        <span class="formula" style="font-size:0.9em;">
+          PL = <span class="const">31.84</span> + <span class="const">21.50</span>&middot;log<sub>10</sub>(<var class="var">d</var><sub>3d</sub>)
+          + <span class="const">19</span>&middot;log<sub>10</sub>(<var class="var">f</var><sub>c</sub>)
+        </span>
+      </div>
+      <p class="text-xs text-muted">&sigma;<sub>SF</sub> = 7.56 dB</p>
+    </div>
+  </div>
+
+  <div class="reveal mt-24">
+    <div class="formula-block">
+      <span class="formula-label">LOS 概率 — UMa</span>
+      <span class="formula">
+        P<sub>LOS</sub>(<var class="var">d</var><sub>2D</sub>) =
+        min(18/<var class="var">d</var><sub>2D</sub>, 1) &middot;
+        (1 - e<sup>-<var class="var">d</var><sub>2D</sub>/63</sup>) +
+        e<sup>-<var class="var">d</var><sub>2D</sub>/63</sup>
+      </span>
+    </div>
+    <div class="formula-block">
+      <span class="formula-label">LOS 断点距离</span>
+      <span class="formula">
+        <var class="var">d</var><sub>BP</sub> = 4 &middot; <var class="var">h</var><sub>BS,eff</sub> &middot;
+        <var class="var">h</var><sub>UT,eff</sub> &middot; <var class="var">f</var><sub>c</sub> &middot; 10<sup>9</sup> / <var class="var">c</var>
+        &nbsp;&nbsp;|&nbsp;&nbsp;<var class="var">c</var> = 3&times;10<sup>8</sup> m/s
+      </span>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 8. CHANNEL MAE MODEL ========================= -->
+<section id="model">
+  <div class="reveal">
+    <div class="section-label">Model Architecture</div>
+    <h2 class="section-title">ChannelMAE 模型架构</h2>
+    <p class="section-desc">Masked Autoencoder + 对比学习的双目标训练框架，输出 16 维 L2 归一化 Embedding。</p>
+  </div>
+
+  <!-- Model architecture SVG -->
+  <div class="svg-container reveal reveal-delay-1">
+    <svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg">
+      <!-- Input -->
+      <rect x="10" y="100" width="100" height="60" rx="10" fill="rgba(244,114,182,0.15)" stroke="rgba(244,114,182,0.4)" stroke-width="1.5"/>
+      <text x="60" y="125" text-anchor="middle" fill="#f9a8d4" font-size="10" font-weight="600">模型输入</text>
+      <text x="60" y="142" text-anchor="middle" fill="#db2777" font-size="8">[B, 16, 128]</text>
+
+      <!-- Arrow -->
+      <line x1="110" y1="130" x2="145" y2="130" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- Transformer Encoder -->
+      <rect x="150" y="70" width="160" height="120" rx="12" fill="rgba(59,130,246,0.12)" stroke="rgba(59,130,246,0.4)" stroke-width="2"/>
+      <text x="230" y="98" text-anchor="middle" fill="#93c5fd" font-size="11" font-weight="700">Transformer Encoder</text>
+      <text x="230" y="118" text-anchor="middle" fill="#60a5fa" font-size="9">4 layers · 8 heads</text>
+      <text x="230" y="136" text-anchor="middle" fill="#60a5fa" font-size="9">dim=128 · FFN=512</text>
+      <text x="230" y="154" text-anchor="middle" fill="#3b82f6" font-size="8">Pre-LN · GELU · Dropout</text>
+      <text x="230" y="172" text-anchor="middle" fill="#3b82f6" font-size="8">+ Learnable Pos Embedding</text>
+
+      <!-- Arrow -->
+      <line x1="310" y1="130" x2="345" y2="130" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- MLP Bottleneck -->
+      <rect x="350" y="90" width="100" height="80" rx="10" fill="rgba(139,92,246,0.15)" stroke="rgba(139,92,246,0.4)" stroke-width="1.5"/>
+      <text x="400" y="118" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="600">MLP</text>
+      <text x="400" y="136" text-anchor="middle" fill="#a78bfa" font-size="9">128→256→128</text>
+      <text x="400" y="152" text-anchor="middle" fill="#7c3aed" font-size="8">Bottleneck</text>
+
+      <!-- Arrow -->
+      <line x1="450" y1="130" x2="485" y2="130" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- Energy-weighted Pooling -->
+      <rect x="490" y="85" width="120" height="90" rx="10" fill="rgba(6,182,212,0.15)" stroke="rgba(6,182,212,0.4)" stroke-width="1.5"/>
+      <text x="550" y="112" text-anchor="middle" fill="#67e8f9" font-size="10" font-weight="600">能量加权池化</text>
+      <text x="550" y="130" text-anchor="middle" fill="#22d3ee" font-size="8">w = softmax(||mlp||)</text>
+      <text x="550" y="146" text-anchor="middle" fill="#0891b2" font-size="8">z = &Sigma; w<tspan baseline-shift="sub" font-size="6">i</tspan> &middot; x<tspan baseline-shift="sub" font-size="6">i</tspan></text>
+      <text x="550" y="162" text-anchor="middle" fill="#0891b2" font-size="7">[B, 128] → [B, 128]</text>
+
+      <!-- Arrow -->
+      <line x1="610" y1="130" x2="645" y2="130" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- Latent Projection -->
+      <rect x="650" y="85" width="120" height="90" rx="10" fill="rgba(34,197,94,0.15)" stroke="rgba(34,197,94,0.4)" stroke-width="1.5"/>
+      <text x="710" y="108" text-anchor="middle" fill="#86efac" font-size="10" font-weight="600">Latent Proj</text>
+      <text x="710" y="126" text-anchor="middle" fill="#4ade80" font-size="8">LN → 128→64</text>
+      <text x="710" y="142" text-anchor="middle" fill="#4ade80" font-size="8">GELU → 64→16</text>
+      <text x="710" y="158" text-anchor="middle" fill="#16a34a" font-size="8">+ Shortcut(128→16)</text>
+
+      <!-- Arrow -->
+      <line x1="770" y1="130" x2="805" y2="130" stroke="#475569" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+      <!-- L2 Norm -->
+      <rect x="810" y="95" width="100" height="70" rx="10" fill="rgba(245,158,11,0.15)" stroke="rgba(245,158,11,0.4)" stroke-width="2"/>
+      <text x="860" y="120" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="700">16-D</text>
+      <text x="860" y="138" text-anchor="middle" fill="#fbbf24" font-size="9">Embedding</text>
+      <text x="860" y="154" text-anchor="middle" fill="#d97706" font-size="8">L2 归一化</text>
+
+      <!-- Decoder branch (below) -->
+      <line x1="400" y1="170" x2="400" y2="220" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+      <rect x="330" y="225" width="140" height="60" rx="10" fill="rgba(239,68,68,0.1)" stroke="rgba(239,68,68,0.25)" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="400" y="248" text-anchor="middle" fill="#f87171" font-size="9" font-weight="600">Transformer Decoder</text>
+      <text x="400" y="265" text-anchor="middle" fill="#ef4444" font-size="8">2 layers · 重构损失</text>
+      <text x="400" y="278" text-anchor="middle" fill="#dc2626" font-size="7">仅训练时使用</text>
+
+      <!-- Contrastive branch (above) -->
+      <line x1="860" y1="95" x2="860" y2="50" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+      <rect x="790" y="10" width="140" height="36" rx="8" fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.2)" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="860" y="33" text-anchor="middle" fill="#60a5fa" font-size="9" font-weight="600">InfoNCE 对比损失</text>
+
+      <defs>
+        <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#60a5fa"/>
+        </marker>
+      </defs>
+    </svg>
+    <div class="svg-title">ChannelMAE: Encoder(4L) → MLP → 能量加权池化 → Latent(128→16) → L2 Embedding</div>
+  </div>
+
+  <!-- Loss functions -->
+  <div class="two-col reveal mt-24">
+    <div>
+      <div class="formula-block">
+        <span class="formula-label">重构损失 (加权 MSE)</span>
+        <span class="formula">
+          L<sub>recon</sub> = &Sigma;<sub>slot</sub> <var class="var">w</var><sub>slot</sub> &middot;
+          MSE(<var class="var">recon</var>, <var class="var">target</var> | <var class="var">active</var>)
+        </span>
+      </div>
+      <p class="text-sm text-muted mt-8">
+        不同 Token 权重不同：SRS(&times;2.0) > PMI(&times;1.5) > PDP/DFT/RSRP(&times;1.0) > Cell RSRP(&times;0.5)。
+        空间特征（SRS/PMI）获得更高权重，因为它们对信道表征最关键。
+      </p>
+    </div>
+    <div>
+      <div class="formula-block">
+        <span class="formula-label">对比损失 (Symmetric InfoNCE)</span>
+        <span class="formula">
+          L<sub>cont</sub> = [CE(z<sub>1</sub>&middot;z<sub>2</sub><sup>T</sup>/&tau;, labels) +
+          CE(z<sub>2</sub>&middot;z<sub>1</sub><sup>T</sup>/&tau;, labels)] / 2
+        </span>
+      </div>
+      <p class="text-sm text-muted mt-8">
+        配对样本（同一位置 UL/DL 或相邻时刻）作为正样本对，温度参数 &tau; 控制分布锐度。
+        额外正则项：正交损失 + 时间平滑 + 均匀分布约束。
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 9. EVALUATION ========================= -->
+<section id="eval">
+  <div class="reveal">
+    <div class="section-label">Evaluation Framework</div>
+    <h2 class="section-title">6 维标准化评估体系</h2>
+    <p class="section-desc">基于 Channel Charting 理论的全方位评估框架，测试集锁定 + 版本化，结果可复现。</p>
+  </div>
+
+  <div class="metric-grid reveal">
+    <div class="metric-card">
+      <div class="metric-name">Continuity (CT)</div>
+      <div class="metric-formula">rank(D<sub>emb</sub>) vs rank(D<sub>phy</sub>)</div>
+      <div class="metric-desc">嵌入空间近邻在物理空间也近邻的比例 — 衡量局部结构保持</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">Trustworthiness (TW)</div>
+      <div class="metric-formula">Lee &amp; Verleysen (2009)</div>
+      <div class="metric-desc">物理空间近邻在嵌入空间也近邻的比例 — CT 的对称指标</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">KNN Consistency</div>
+      <div class="metric-formula">&Sigma; sim(attr<sub>i</sub>, attr<sub>NN(i)</sub>) / K</div>
+      <div class="metric-desc">K近邻的物理属性（SNR/SIR/移动模式）一致性</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">NMSE (dB)</div>
+      <div class="metric-formula">10&middot;log<sub>10</sub>(||H-H&#770;||<sup>2</sup>/||H||<sup>2</sup>)</div>
+      <div class="metric-desc">归一化均方误差 — 重构质量的直接度量</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">Cosine Separation</div>
+      <div class="metric-formula">margin(cos<sub>pos</sub> - cos<sub>neg</sub>)</div>
+      <div class="metric-desc">正样本对与负样本对的余弦相似度分离度</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">Kendall &tau;</div>
+      <div class="metric-formula">(concordant - discordant) / C(n,2)</div>
+      <div class="metric-desc">嵌入距离与物理距离的全局秩相关系数</div>
+    </div>
+  </div>
+
+  <div class="card reveal mt-32">
+    <h3>评估流程保障</h3>
+    <div class="two-col mt-16">
+      <div>
+        <p class="text-sm" style="color:#94a3b8;">
+          <span class="highlight">测试集锁定</span>：评估使用固定划分的测试集，不随训练数据变动。
+          数据集版本化管理，确保不同模型在完全相同的数据上比较。
+        </p>
+      </div>
+      <div>
+        <p class="text-sm" style="color:#94a3b8;">
+          <span class="highlight">自动化流水线</span>：<code>run_eval()</code> 一键完成 checkpoint 加载 → embedding 收集 →
+          6 指标计算 → 结果持久化 → 排行榜更新。支持 UMAP/t-SNE 2D 降维可视化。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 10. ENGINEERING CHALLENGES ========================= -->
+<section id="challenges">
+  <div class="reveal">
+    <div class="section-label">Engineering Challenges</div>
+    <h2 class="section-title">工程挑战与巧思</h2>
+    <p class="section-desc">从 Git 历史中提炼的 8 个真实技术难题 —— 每一个都是在生产级代码中发现并解决的非显然问题。</p>
+  </div>
+
+  <!-- Challenge 1 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">F-003</span>
+      <span class="challenge-title">噪声带宽计算错误 — 虚高 24.4 dB</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>三个数据源全部使用系统总带宽（N_RB &times; 12 &times; SCS）计算热噪声功率，
+        但实际应按<strong>单个 RB 带宽</strong>（12 &times; SCS）计算。
+        对于 273 RB 的 100MHz 系统，噪声虚高 10&middot;log<sub>10</sub>(273) = <span style="color:#f87171;font-weight:600">24.4 dB</span>。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label cause">&#x1F50D; 根因</div>
+      <p>混淆了频域每 bin 的噪声功率与系统总噪声功率。每个频域 bin（RB）独立处理时，噪声带宽应为单 RB 宽度。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决</div>
+    </div>
+    <div class="code-block">
+      <span class="lang-label">Python</span>
+      <code><span class="cm"># 修复前: bw_db = 10 * log10(self.bandwidth_hz)  # 系统总带宽!</span>
+<span class="cm"># 修复后:</span>
+bw_per_rb = <span class="num">12.0</span> * self.subcarrier_spacing  <span class="cm"># 单 RB 带宽</span>
+bw_db = <span class="num">10.0</span> * math.log10(bw_per_rb)</code>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label result">&#x1F4CA; 效果</div>
+      <p>QuaDRiGa NMSE 从 +29 dB 降至合理水平。Python / MATLAB / Sionna 三源全部同步修复。</p>
+    </div>
+  </div>
+
+  <!-- Challenge 2 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">F-004</span>
+      <span class="challenge-title">TDL 干扰功率与服务信道差 10 万倍</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>Sionna RT 成功时服务信道功率极弱（3.4&times;10<sup>-9</sup>），而 TDL 生成的干扰信道原始功率 ~1-10。
+        归一化后干扰比服务信道强 <span style="color:#f87171;font-weight:600">10 万倍</span>，
+        SIR = -49.9 dB（应为正值）。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决</div>
+    </div>
+    <div class="code-block">
+      <span class="lang-label">Python</span>
+      <code><span class="cm"># 将 TDL 干扰信道功率对齐到服务信道量级</span>
+_h_tdl_pw = <span class="fn">float</span>(np.mean(np.abs(_h_tdl) ** <span class="num">2</span>))
+_serv_pw = <span class="fn">float</span>(np.mean(np.abs(h_all[_s_idx]) ** <span class="num">2</span>))
+<span class="kw">if</span> _h_tdl_pw > <span class="num">1e-30</span> <span class="kw">and</span> _serv_pw > <span class="num">1e-30</span>:
+    _h_tdl = _h_tdl * np.sqrt(_serv_pw / _h_tdl_pw)</code>
+    </div>
+  </div>
+
+  <!-- Challenge 3 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">F-008</span>
+      <span class="challenge-title">时域相关缺失 — 相邻快照相关仅 0.13</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>TDL 模型为每个时间快照独立生成信道，导致 3.6 km/h、10ms 间隔下相邻快照自相关系数仅
+        <span style="color:#f87171;font-weight:600">0.13</span>，完全不符合物理衰落的 Jakes 自相关特性。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决</div>
+      <p>共享衰落状态：用确定性种子固定抽头增益和 Doppler 参数，在连续时间轴上评估 Sum-of-Sinusoids 模型。</p>
+    </div>
+    <div class="code-block">
+      <span class="lang-label">Python</span>
+      <code><span class="cm"># 连续时间轴 → Jakes 自相关 J₀(2π·f_d·Δt)</span>
+t_axis = t_offset_s + np.arange(T) * T_sym
+<span class="kw">for</span> n <span class="kw">in</span> range(N_sinusoids):
+    phase += A_n * np.cos(<span class="num">2</span>*np.pi*f_d*t_axis*cos_theta_n + phi_n)
+<span class="cm"># 衰落参数通过 fading_seed 跨快照共享</span></code>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label result">&#x1F4CA; 效果</div>
+      <p>Lag-1 自相关从 <span style="color:#f87171">0.13</span> 提升至
+        <span style="color:#4ade80;font-weight:600">0.88</span>（50 样本验证），符合 Jakes 理论预测。</p>
+    </div>
+  </div>
+
+  <!-- Challenge 4 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">F-005</span>
+      <span class="challenge-title">静态模式 UE 位置每帧随机漂移</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>mobility_mode=static 时，8 个快照中 UE 位置出现离散跳变。静态模式本应位置完全不变。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label cause">&#x1F50D; 根因</div>
+      <p>静态模式不生成轨迹，每个快照的 <code>ue_pos_override=None</code>，RT 重试逻辑重新调用
+        <code>_place_ues()</code> 导致位置重新随机化。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决</div>
+    </div>
+    <div class="code-block">
+      <span class="lang-label">Python</span>
+      <code><span class="kw">if</span> self.mobility_mode == <span class="str">"static"</span>:
+    static_rng = np.random.default_rng(self._seed + <span class="num">8888</span>)
+    static_pos = self._place_ues(static_rng, sites, <span class="num">1</span>)[<span class="num">0</span>]
+<span class="cm"># 所有快照共享同一 static_pos → max_position_delta = 0</span></code>
+    </div>
+  </div>
+
+  <!-- Challenge 5 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">F-006</span>
+      <span class="challenge-title">RT 失败回退破坏时间连续性</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>Sionna RT 在序列中间某帧失败时，回退到独立 TDL 生成，导致该帧与前后帧完全不相关，
+        时间序列断裂。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决</div>
+      <p>维护 <code>_last_rt_channels</code> 缓存，RT 失败时优先复用上一成功帧的信道数据。
+        仅首帧（无历史记录）才降级到 TDL。这保持了时域连续性，同时不会在空间上引入错误。</p>
+    </div>
+  </div>
+
+  <!-- Challenge 6 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">F-002</span>
+      <span class="challenge-title">QuaDRiGa 零速度导致 MATLAB 崩溃</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>静态模式下 <code>set_speed(0, T)</code> 导致 QuaDRiGa 内部 <code>samples_per_meter = Inf</code>，
+        插值崩溃。同时静态/近静态轨迹返回的快照数少于请求数，reshape 出错。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决</div>
+      <p>双重保护：1) 速度地板值 <code>max(speed, 1e-3)</code> km/h 防止 Inf；
+        2) 快照不足时 <code>repmat</code> 首帧填充到期望维度。</p>
+    </div>
+  </div>
+
+  <!-- Challenge 7 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">ARCH</span>
+      <span class="challenge-title">配对 UL/DL 干扰估计 — 1444 行大重构</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>原始平台仅支持单链路(UL)估计，无法建模真实蜂窝系统中 UL 和 DL 方向各异的干扰特性。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决 (5阶段)</div>
+      <p><strong>Phase A</strong>: 扩展 ChannelSample 合约增加 <code>h_dl_*</code> 字段<br>
+        <strong>Phase B</strong>: 共享 <code>_interference_estimation.py</code>：UL 用 ZC-SRS 叠加，DL 用 Gold-PRBS CSI-RS 叠加<br>
+        <strong>Phase C</strong>: 三数据源全部适配 (internal_sim / sionna_rt / quadriga_real)<br>
+        <strong>Phase D</strong>: Bridge 按方向拆分 Token (UL→SRS/DFT/RSRP, DL→PMI/CQI)<br>
+        <strong>Phase E</strong>: FeatureExtractor 方向无关，无需改动<br>
+        <span class="highlight--green">结果: 286 测试通过，13 跳过</span>
+      </p>
+    </div>
+  </div>
+
+  <!-- Challenge 8 -->
+  <div class="challenge-card reveal">
+    <div class="challenge-header">
+      <span class="challenge-id">INFRA</span>
+      <span class="challenge-title">去 Dramatiq 化 — 消除外部依赖</span>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label problem">&#x1F534; 问题</div>
+      <p>Dramatiq + Redis 消息队列在单进程模式下：Broker 实例冲突、ACK 残留导致消息丢失、依赖臃肿。</p>
+    </div>
+    <div class="challenge-section">
+      <div class="challenge-section-label solution">&#x2705; 解决</div>
+    </div>
+    <div class="code-block">
+      <span class="lang-label">Python</span>
+      <code><span class="cm"># 线程直派，零外部依赖</span>
+t = threading.Thread(
+    target=_run_in_thread,
+    args=(job_id, job_type, overrides),
+    daemon=<span class="const">True</span>,
+    name=<span class="str">f"job-{job_id[:8]}"</span>
+)
+t.start()
+<span class="cm"># 失败时回退到 JSON 文件队列</span></code>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= 11. TRUST ========================= -->
+<section id="trust">
+  <div class="reveal">
+    <div class="section-label">Data Trust</div>
+    <h2 class="section-title">数据可信度保障</h2>
+    <p class="section-desc">三层防护体系确保从原始信道到最终 Embedding 的全链路数据质量。</p>
+  </div>
+
+  <div class="reveal">
+    <div class="trust-layer trust-layer--l1">
+      <h4>L1 — 数据合约 (Pydantic v2)</h4>
+      <p>每个 ChannelSample 必须通过严格的 schema 校验：</p>
+      <ul style="margin-top:8px; padding-left:20px; font-size:0.88rem; color:#94a3b8; line-height:2;">
+        <li><strong>形状一致性</strong>: h_serving_true 必须为 [T, RB, BS_ant, UE_ant] 四维</li>
+        <li><strong>类型约束</strong>: 信道矩阵必须为 complex64/complex128</li>
+        <li><strong>范围校验</strong>: SNR ∈ [-30, 60] dB, SIR clamped to [-50, 50] dB</li>
+        <li><strong>配对完整性</strong>: 若 paired_mode=true，则 h_dl_* 字段不可为 None</li>
+        <li><strong>版本标记</strong>: CONTRACT_VERSION = "1.0"，确保前向兼容</li>
+      </ul>
+    </div>
+
+    <div class="trust-layer trust-layer--l2">
+      <h4>L2 — 质量门控 (Quality Gates)</h4>
+      <p>Bridge 阶段的三重自适应门控，每个 Gate 输出范围 [0.7, 1.0]：</p>
+      <ul style="margin-top:8px; padding-left:20px; font-size:0.88rem; color:#94a3b8; line-height:2;">
+        <li><strong>SINR Gate</strong>: 低 SINR 样本的 SRS 特征被软抑制 (×0.7)，而非丢弃</li>
+        <li><strong>Energy Gate</strong>: SVD 奇异值权重反映每个空间层的信息量</li>
+        <li><strong>PMI Gate</strong>: 基于 CQI 的预编码质量评估</li>
+      </ul>
+      <div class="formula-block mt-16" style="margin-bottom:0;">
+        <span class="formula">gate = sigmoid(x) &times; 0.3 + 0.7 &nbsp;&#x2192;&nbsp; 永不完全关闭，保留信息下界</span>
+      </div>
+    </div>
+
+    <div class="trust-layer trust-layer--l3">
+      <h4>L3 — 评估闭环 (Evaluation Loop)</h4>
+      <p>模型评估的三重保障：</p>
+      <ul style="margin-top:8px; padding-left:20px; font-size:0.88rem; color:#94a3b8; line-height:2;">
+        <li><strong>测试集锁定</strong>: 固定划分，不随训练数据变动</li>
+        <li><strong>版本化</strong>: 每次评估记录数据版本、模型 checkpoint、超参数</li>
+        <li><strong>6 指标综合</strong>: CT, TW, KNN, NMSE, Cosine, Kendall — 单一指标无法刷榜</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card reveal mt-24">
+    <h3>跨源一致性保障</h3>
+    <p style="color:#94a3b8; font-size:0.88rem; margin-top:8px;">
+      三个数据源共享同一 <code>ChannelSample</code> 合约 + 统一的功率归一化流程 + 一致的 TDD 方向互易处理。
+      每次信道配置参数变更必须<strong>同步适配所有三个源</strong>（internal_sim / sionna_rt / quadriga_real），
+      并同步更新前端 CollectWizard 和文档。这是团队通过多次跨源不一致 Bug 总结出的铁律。
+    </p>
+  </div>
+</section>
+
+<!-- ========================= 12. TECH STACK & VALUE ========================= -->
+<section id="stack">
+  <div class="reveal">
+    <div class="section-label">Technology &amp; Value</div>
+    <h2 class="section-title">技术栈与平台价值</h2>
+  </div>
+
+  <div class="card-grid card-grid--4 reveal">
+    <div class="card" style="text-align:center;">
+      <div class="card-icon card-icon--blue" style="margin:0 auto 12px;">&#x269B;</div>
+      <h3>前端</h3>
+      <p>React 18 · TypeScript<br>Ant Design · Plotly<br>14 路由 · SVG 拓扑画布</p>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="card-icon card-icon--green" style="margin:0 auto 12px;">&#x26A1;</div>
+      <h3>后端</h3>
+      <p>FastAPI · SQLAlchemy<br>SQLite · 线程 Worker<br>RESTful API · Hydra Config</p>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="card-icon card-icon--purple" style="margin:0 auto 12px;">&#x1F9E0;</div>
+      <h3>ML 核心</h3>
+      <p>PyTorch · ChannelMAE<br>MAE + Contrastive<br>16-D L2 Embedding</p>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div class="card-icon card-icon--amber" style="margin:0 auto 12px;">&#x1F4E1;</div>
+      <h3>仿真引擎</h3>
+      <p>3GPP TDL · Sionna RT<br>MATLAB QuaDRiGa<br>NumPy / SciPy</p>
+    </div>
+  </div>
+
+  <div class="card-grid card-grid--3 reveal mt-32">
+    <div class="card">
+      <h3 style="color:#60a5fa;">一站式数据工厂</h3>
+      <p>从场景配置到数据采集、特征提取、格式导出，全流程 Web 界面操作。
+        三源融合消除数据孤岛，统一合约确保数据互通。6 种场景预设开箱即用。</p>
+    </div>
+    <div class="card">
+      <h3 style="color:#a78bfa;">标准化评估引擎</h3>
+      <p>6 维指标体系让模型对比有据可依。测试集锁定 + 版本化确保结果可复现。
+        一键评估：加载模型 → 推理 → 计算指标 → 排行榜更新。</p>
+    </div>
+    <div class="card">
+      <h3 style="color:#22d3ee;">快速迭代能力</h3>
+      <p>Hydra 配置驱动实验管理，一行命令切换场景/模型/超参数。
+        线程化任务执行无需外部消息队列。286+ 自动化测试保障迭代安全。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= FOOTER ========================= -->
+<footer>
+  <p>MSG-Embedding Platform &middot; 5G NR 信道数据工厂与模型评估引擎</p>
+  <p style="margin-top:8px; color:#334155;">Built with Python · PyTorch · React · FastAPI</p>
+</footer>
+
+<!-- ========================= JAVASCRIPT ========================= -->
+<script>
+// Scroll reveal
+const revealEls = document.querySelectorAll('.reveal, .timeline-item');
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
+}, { threshold: 0.1 });
+revealEls.forEach(el => observer.observe(el));
+
+// Nav scroll effect
+const nav = document.getElementById('navbar');
+window.addEventListener('scroll', () => {
+  nav.classList.toggle('scrolled', window.scrollY > 50);
+});
+
+// Active nav link
+const sections = document.querySelectorAll('section[id]');
+const navLinks = document.querySelectorAll('.nav-links a');
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(s => {
+    if (window.scrollY >= s.offsetTop - 200) current = s.id;
+  });
+  navLinks.forEach(a => {
+    a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+  });
+});
+
+// Counter animation
+function animateCounter(el) {
+  const target = parseInt(el.dataset.target);
+  const duration = 1500;
+  const start = performance.now();
+  function tick(now) {
+    const progress = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(target * eased);
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+const counterObserver = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      animateCounter(e.target);
+      counterObserver.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.5 });
+document.querySelectorAll('.counter').forEach(el => counterObserver.observe(el));
+</script>
+</body>
+</html>

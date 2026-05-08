@@ -24,6 +24,7 @@ from .hex_grid import CellSite
 __all__ = [
     "assign_pci_mod3",
     "assign_pci_graph_coloring",
+    "assign_pci_hypercell",
     "PciPlanResult",
 ]
 
@@ -177,3 +178,38 @@ def assign_pci_graph_coloring(
     result.num_used_colors = len({c for c in colours if c >= 0})
     result.num_conflicts = conflicts
     return result
+
+
+# ------------------------------------------------------------------
+# HyperCell planner (HSR linear topology)
+# ------------------------------------------------------------------
+
+
+def assign_pci_hypercell(
+    sites: list[CellSite],
+    hypercell_size: int = 4,
+) -> list[CellSite]:
+    """Assign PCIs for HyperCell grouping along a linear track.
+
+    Consecutive *hypercell_size* sites share the same PCI group so that
+    a moving UE does not trigger handover within a HyperCell. Different
+    HyperCell groups use different PCI groups.
+
+    Formula: ``PCI = 3 * group_index + sector_id`` where
+    ``group_index = site_id // hypercell_size``.
+
+    Args:
+        sites: Output of :func:`make_linear_grid` (sorted by site_id).
+        hypercell_size: Number of consecutive RRH sites per HyperCell.
+            ``1`` degenerates to standard per-site PCI assignment.
+    """
+    if hypercell_size < 1:
+        raise ValueError(f"hypercell_size must be >= 1, got {hypercell_size}")
+    out: list[CellSite] = []
+    for s in sites:
+        group_idx = s.site_id // hypercell_size
+        pci = 3 * (group_idx % 168) + s.sector_id
+        if pci >= _NUM_PCI_TOTAL:
+            pci = 3 * (group_idx % _NUM_PCI_GROUPS) + s.sector_id
+        out.append(replace(s, pci=int(pci)))
+    return out

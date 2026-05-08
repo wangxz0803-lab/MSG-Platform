@@ -1,4 +1,4 @@
-"""CLI entry point for MSG-Embedding batch inference.
+"""CLI entry point for ChannelHub batch inference.
 
 Typical usage::
 

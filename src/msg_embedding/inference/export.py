@@ -1,4 +1,4 @@
-"""ONNX + TorchScript export of the MSG-Embedding encoder wrapper."""
+"""ONNX + TorchScript export of the ChannelHub encoder wrapper."""
 
 from __future__ import annotations
 

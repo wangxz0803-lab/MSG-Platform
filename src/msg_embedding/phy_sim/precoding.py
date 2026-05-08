@@ -36,9 +36,9 @@ def _ul_to_dl(h_ul: np.ndarray) -> np.ndarray:
     Both stored as [..., BS_ant, UE_ant] in contract convention.
     h_ul_contract[bs, ue] = gain from UE_ue → BS_bs (physical UL).
     h_dl_contract[bs, ue] = gain from BS_bs → UE_ue (physical DL).
-    Reciprocity: h_dl_contract = conj(h_ul_contract) (no transpose in contract).
+    Reciprocity in contract convention: h_dl = h_ul (identity mapping).
     """
-    return np.conj(h_ul)
+    return h_ul
 
 
 def compute_dl_precoding(
@@ -138,6 +138,70 @@ def compute_dl_precoding_wideband(
         all_sv[rb, :len(s)] = s.astype(np.float32)
 
     return PrecodingResult(w_dl=w_dl, rank=rank, singular_values=all_sv)
+
+
+def project_interference_channels(
+    h_interferers: np.ndarray,
+    h_bs_to_own_ues: list[np.ndarray],
+    *,
+    max_rank: int = 4,
+    rank_threshold: float = 0.1,
+) -> tuple[np.ndarray, list[int]]:
+    """Project each interferer's channel onto its own DL precoding subspace.
+
+    For interfering cell *k* serving its own UE *P_k*, compute ``W_k`` via
+    SVD of ``H(BS_k → P_k)`` and project the interference channel
+    ``H(BS_k → Q)`` onto the column-space of ``W_k``:
+
+        H_proj = W_k @ W_k^H @ H(BS_k → Q)
+
+    The output keeps the original ``[K-1, T, RB, BS_ant, UE_ant]`` shape
+    so all downstream consumers (contract validator, bridge covariance,
+    interference estimation) work without modification.
+
+    Parameters
+    ----------
+    h_interferers:
+        ``[K-1, T, RB, BS_ant, UE_ant]`` — DL channels from each
+        interfering BS to the target UE (contract convention).
+    h_bs_to_own_ues:
+        List of *K-1* arrays, each ``[T, RB, BS_ant, UE_ant]`` —
+        DL channel from interfering BS_k to its own scheduled UE P_k.
+
+    Returns
+    -------
+    h_projected:
+        ``[K-1, T, RB, BS_ant, UE_ant]`` complex64 — projected channels.
+    ranks:
+        Per-cell transmission ranks.
+    """
+    K_minus_1 = h_interferers.shape[0]
+    if len(h_bs_to_own_ues) != K_minus_1:
+        raise ValueError(
+            f"h_bs_to_own_ues length ({len(h_bs_to_own_ues)}) "
+            f"must match h_interferers leading dim ({K_minus_1})"
+        )
+
+    h_projected = np.empty_like(h_interferers)
+    ranks: list[int] = []
+
+    for ki in range(K_minus_1):
+        # DL channel → conjugate → UL convention for compute_dl_precoding
+        prec = compute_dl_precoding(
+            np.conj(h_bs_to_own_ues[ki]),
+            max_rank=max_rank,
+            rank_threshold=rank_threshold,
+        )
+        w_k = prec.w_dl  # [RB, BS_ant, rank_k]
+        ranks.append(prec.rank)
+
+        # Projection matrix P_k = W_k @ W_k^H : [RB, BS_ant, BS_ant]
+        P_k = np.einsum("fbr,fgr->fbg", w_k, np.conj(w_k))
+
+        # H_proj = P_k @ H(BS_k → Q)
+        h_projected[ki] = np.einsum("fba,tfau->tfbu", P_k, h_interferers[ki])
+
+    return h_projected.astype(np.complex64), ranks
 
 
 def apply_precoding(

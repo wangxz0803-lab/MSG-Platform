@@ -5,12 +5,12 @@ export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancell
 export type JobType =
   | 'convert'
   | 'bridge'
-  | 'train'
   | 'eval'
   | 'infer'
   | 'export'
   | 'report'
-  | 'simulate';
+  | 'simulate'
+  | 'dataset_export';
 export type LinkType = 'UL' | 'DL';
 export type LinkPairing = 'single' | 'paired';
 export type MobilityMode = 'static' | 'linear' | 'random_walk' | 'random_waypoint';
@@ -24,6 +24,7 @@ export interface HealthResponse {
 
 export interface Sample {
   sample_id: string;
+  uuid: string;
   source: string;
   link: LinkType;
   snr_dB: number;
@@ -36,6 +37,10 @@ export interface Sample {
   timestamp: string;
   tags: string[];
   meta?: Record<string, unknown>;
+  stage: string;
+  serving_cell_id: number | null;
+  channel_est_mode: string | null;
+  bridged_path: string | null;
 }
 
 export interface DatasetSummary {
@@ -49,6 +54,7 @@ export interface DatasetSummary {
   dl_sir_mean: number | null;
   links: LinkType[];
   has_paired: boolean;
+  stage_counts: Record<string, number>;
 }
 
 export interface DatasetsResponse {
@@ -195,6 +201,9 @@ export interface TopologyPreviewRequest {
   num_ues: number;
   ue_distribution: 'uniform' | 'clustered' | 'hotspot';
   ue_speed_kmh: number;
+  topology_layout?: 'hexagonal' | 'linear';
+  hypercell_size?: number;
+  track_offset_m?: number;
 }
 
 export interface TopologyPreviewResponse {
@@ -219,6 +228,111 @@ export interface DatasetFilters {
   max_snr?: number;
   limit?: number;
   offset?: number;
+}
+
+// --- Split management -------------------------------------------------------
+
+export interface SplitComputeRequest {
+  strategy: 'random' | 'by_position' | 'by_beam';
+  seed: number;
+  ratios: [number, number, number];
+  lock: boolean;
+}
+
+export interface SplitInfoResponse {
+  locked: boolean;
+  version: number;
+  strategy: string | null;
+  seed: number | null;
+  ratios: number[] | null;
+  locked_at: string | null;
+  locked_test_uuids: number;
+  counts: Record<string, number>;
+}
+
+// --- Dataset export ---------------------------------------------------------
+
+export interface DatasetExportRequest {
+  format: 'hdf5' | 'webdataset' | 'pt_dir';
+  split?: string | null;
+  source_filter?: string | null;
+  link_filter?: LinkType | null;
+  min_snr?: number | null;
+  max_snr?: number | null;
+  export_name?: string | null;
+  shard_size?: number;
+  include_interferers?: boolean;
+}
+
+export interface ExportInfo {
+  name: string;
+  format: string;
+  num_samples: number;
+  split: string;
+  split_version: number;
+  total_bytes: number;
+  path: string;
+  download_url?: string;
+}
+
+export interface ExportsResponse {
+  exports: ExportInfo[];
+}
+
+// --- Model upload -----------------------------------------------------------
+
+export interface ModelUploadResponse {
+  run_id: string;
+  artifact_id: number;
+  path: string;
+  format: ModelFormat;
+  size_bytes: number;
+  compatible: boolean;
+  compatibility_detail: string | null;
+}
+
+export interface ModelEvalRequest {
+  test_split?: string;
+  limit?: number | null;
+  device?: string;
+}
+
+export interface ModelInferRequest {
+  input_path?: string | null;
+  split?: string;
+  limit?: number | null;
+  device?: string;
+  batch_size?: number;
+  output_name?: string | null;
+}
+
+export interface ModelMeta {
+  run_id: string;
+  tags: string | null;
+  created_at: string | null;
+  ckpt_path: string | null;
+  epoch?: number;
+  best_loss?: number;
+  global_step?: number;
+  num_parameters?: number;
+  has_optimizer_state?: boolean;
+  training_config?: Record<string, unknown>;
+  compatible: boolean;
+  compatibility_detail: string;
+  metrics?: Record<string, number>;
+}
+
+export interface LeaderboardEntry {
+  run_id: string;
+  tags: string | null;
+  compatible: boolean;
+  test_split_version: number | null;
+  metrics: Record<string, number | null>;
+  evaluated_at: string | null;
+}
+
+export interface LeaderboardResponse {
+  entries: LeaderboardEntry[];
 }
 
 export interface JobFilters {

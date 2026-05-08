@@ -1,4 +1,4 @@
-"""Latency / throughput benchmark for MSG-Embedding inference artifacts."""
+"""Latency / throughput benchmark for ChannelHub inference artifacts."""
 
 from __future__ import annotations
 

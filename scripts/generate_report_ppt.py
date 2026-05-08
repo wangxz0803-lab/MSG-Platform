@@ -1,4 +1,4 @@
-"""MSG-Embedding PPT report generator (Chinese labels, professional styling).
+"""ChannelHub PPT report generator (Chinese labels, professional styling).
 
 Usage:
     python scripts/generate_report_ppt.py
@@ -480,7 +480,7 @@ def generate_ppt(
 
     _add_title_slide(
         prs,
-        "MSG-Embedding 信道嵌入系统",
+        "ChannelHub · 信道数据工场",
         "多源数据采集、模型训练与推理分析汇报",
         datetime.now().strftime("%Y年%m月%d日"),
     )
@@ -737,7 +737,7 @@ def generate_ppt(
     p.font.color.rgb = C_WHITE
     p.alignment = PP_ALIGN.CENTER
     p2 = tx.text_frame.add_paragraph()
-    p2.text = "MSG-Embedding Channel Intelligence Platform"
+    p2.text = "ChannelHub · 信道数据工场"
     p2.font.size = Pt(16)
     p2.font.color.rgb = RGBColor(0x90, 0x9C, 0xD0)
     p2.alignment = PP_ALIGN.CENTER

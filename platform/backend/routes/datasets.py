@@ -1,11 +1,13 @@
-"""Datasets endpoints -- aggregates + paginated sample queries."""
+"""Datasets endpoints -- aggregates, paginated sample queries, split management, export."""
 
 from __future__ import annotations
 
 import statistics
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,13 +16,17 @@ from ..models.sample import Sample
 from ..schemas.job import JobSchema
 from ..schemas.sample import (
     DatasetCollectRequest,
+    DatasetExportRequest,
     DatasetListResponse,
     DatasetSampleListResponse,
     DatasetSummary,
     SampleSchema,
+    SplitComputeRequest,
+    SplitInfoResponse,
 )
 from ..services.job_dispatch import deserialize_overrides, dispatch_job
 from ..services.manifest_sync import sync_manifest_to_db
+from ..settings import get_settings
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -53,6 +59,10 @@ def _sample_to_schema(row: Sample) -> SampleSchema:
         status=row.status,
         shard_id=row.shard_id,
         run_id=row.run_id,
+        stage=getattr(row, "stage", None) or "raw",
+        serving_cell_id=getattr(row, "serving_cell_id", None),
+        channel_est_mode=getattr(row, "channel_est_mode", None),
+        bridged_path=getattr(row, "bridged_path", None),
     )
 
 
@@ -93,6 +103,10 @@ def list_datasets(
         dl_sirs = [x.dl_sir_db for x in items if getattr(x, "dl_sir_db", None) is not None]
         links = sorted({x.link for x in items if x.link})
         has_paired = any(getattr(x, "link_pairing", None) == "paired" for x in items)
+        sc: dict[str, int] = {}
+        for x in items:
+            s = getattr(x, "stage", None) or "raw"
+            sc[s] = sc.get(s, 0) + 1
         summaries.append(
             DatasetSummary(
                 source=src,
@@ -105,6 +119,7 @@ def list_datasets(
                 dl_sir_mean=statistics.fmean(dl_sirs) if dl_sirs else None,
                 links=links,
                 has_paired=has_paired,
+                stage_counts=sc,
             )
         )
 
@@ -182,4 +197,186 @@ def collect_dataset(
         config_overrides=deserialize_overrides(job.params_json),
         log_path=job.log_path,
         error_msg=job.error_msg,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Split management
+# ---------------------------------------------------------------------------
+
+def _get_manifest():
+    """Load the project manifest."""
+    from msg_embedding.data.manifest import Manifest
+
+    settings = get_settings()
+    return Manifest(settings.manifest_file)
+
+
+@router.get("/split/status", response_model=SplitInfoResponse)
+def get_split_status() -> SplitInfoResponse:
+    """Return the current split state (locked, version, counts)."""
+    m = _get_manifest()
+    info = m.get_split_info()
+    return SplitInfoResponse(**info)
+
+
+@router.post("/split", response_model=SplitInfoResponse)
+def compute_and_lock_split(
+    payload: SplitComputeRequest,
+    db: Session = Depends(get_db),
+) -> SplitInfoResponse:
+    """Compute train/val/test split and optionally lock it.
+
+    Once locked, the test and val sets are immutable. New data added later
+    is automatically assigned to the train split.
+    """
+    m = _get_manifest()
+
+    if m.is_split_locked:
+        raise HTTPException(
+            status_code=409,
+            detail="Split is already locked. Unlock first to re-compute.",
+        )
+
+    ratios = tuple(payload.ratios)
+    m.compute_split(strategy=payload.strategy, seed=payload.seed, ratios=ratios)
+    m.save()
+
+    if payload.lock:
+        m.lock_split()
+
+    sync_manifest_to_db(db)
+    return SplitInfoResponse(**m.get_split_info())
+
+
+@router.post("/split/unlock")
+def unlock_split() -> dict[str, Any]:
+    """Unlock the current split (admin operation). Existing labels are kept."""
+    m = _get_manifest()
+    if not m.is_split_locked:
+        raise HTTPException(status_code=409, detail="Split is not locked.")
+    m.unlock_split()
+    return {"unlocked": True, **m.get_split_info()}
+
+
+# ---------------------------------------------------------------------------
+# Data export
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/export",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def export_dataset_endpoint(
+    payload: DatasetExportRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Kick off a dataset export job."""
+    overrides = {
+        "export.format": payload.format,
+        "export.split": payload.split,
+        "export.source_filter": payload.source_filter,
+        "export.link_filter": payload.link_filter,
+        "export.min_snr": payload.min_snr,
+        "export.max_snr": payload.max_snr,
+        "export.export_name": payload.export_name,
+        "export.shard_size": payload.shard_size,
+        "export.include_interferers": payload.include_interferers,
+    }
+    overrides = {k: v for k, v in overrides.items() if v is not None}
+
+    try:
+        job = dispatch_job(
+            db,
+            job_type="dataset_export",
+            config_overrides=overrides,
+            display_name=f"export:{payload.format}:{payload.split or 'all'}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"job_id": job.job_id}
+
+
+@router.get("/exports")
+def list_exports() -> dict[str, Any]:
+    """List available export packages with download URLs."""
+    settings = get_settings()
+    exports_dir = settings.exports_path
+    if not exports_dir.exists():
+        return {"exports": []}
+
+    result = []
+    for p in sorted(exports_dir.iterdir()):
+        if p.is_file() and p.suffix == ".h5":
+            try:
+                import h5py
+                with h5py.File(p, "r") as f:
+                    info = {
+                        "name": p.name,
+                        "format": "hdf5",
+                        "num_samples": int(f.attrs.get("num_samples", 0)),
+                        "split": str(f.attrs.get("split", "")),
+                        "split_version": int(f.attrs.get("split_version", 0)),
+                        "total_bytes": p.stat().st_size,
+                        "path": str(p),
+                        "download_url": f"/api/datasets/exports/{p.name}/download",
+                    }
+                    result.append(info)
+            except Exception:
+                pass
+        elif p.is_dir():
+            readme_path = p / "README.json"
+            if readme_path.exists():
+                try:
+                    import json
+                    meta = json.loads(readme_path.read_text(encoding="utf-8"))
+                    total = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+                    info = {
+                        "name": p.name,
+                        "format": meta.get("export_format", "unknown"),
+                        "num_samples": meta.get("num_samples", 0),
+                        "split": meta.get("export_split", ""),
+                        "split_version": meta.get("split_version", 0),
+                        "total_bytes": total,
+                        "path": str(p),
+                        "download_url": f"/api/datasets/exports/{p.name}/download",
+                    }
+                    result.append(info)
+                except Exception:
+                    pass
+
+    return {"exports": result}
+
+
+@router.get("/exports/{name}/download")
+def download_export(name: str):
+    """Download an export package (single file or zipped directory)."""
+    settings = get_settings()
+    exports_dir = settings.exports_path
+    target = exports_dir / name
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"export '{name}' not found")
+
+    safe = target.resolve()
+    if not str(safe).startswith(str(exports_dir.resolve())):
+        raise HTTPException(status_code=400, detail="invalid export name")
+
+    if target.is_file():
+        return FileResponse(
+            path=str(target),
+            filename=name,
+            media_type="application/octet-stream",
+        )
+
+    import shutil
+    import tempfile
+    zip_dir = Path(tempfile.mkdtemp())
+    zip_path = zip_dir / f"{name}.zip"
+    shutil.make_archive(str(zip_path.with_suffix("")), "zip", str(target))
+    return FileResponse(
+        path=str(zip_path),
+        filename=f"{name}.zip",
+        media_type="application/zip",
     )

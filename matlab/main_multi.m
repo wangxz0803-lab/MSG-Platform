@@ -107,10 +107,14 @@ function main_multi(config_path)
     Nr_h = cfg.ue_ant_h;
     ue_ant = Nr_v * Nr_h;       % single-pol
 
-    if isfield(cfg, 'n_rb');    N_RB = cfg.n_rb;  else; N_RB = 12 * 136; end
-    if isfield(cfg, 'sc_inter'); sc_inter = cfg.sc_inter; else; sc_inter = 30e3; end
-    bandwidth = N_RB * 12 * sc_inter;  % 每 RB = 12 子载波
-    T_snapshots = 1e-3;
+    sc_inter = cfg.sc_inter;
+    if ~isempty(cfg.n_rb) && cfg.n_rb > 0
+        N_RB = cfg.n_rb;
+    else
+        N_RB = floor(cfg.bandwidth_hz / (12 * sc_inter));
+    end
+    bandwidth = N_RB * 12 * sc_inter;
+    T_snapshots = cfg.sample_interval_s;
     downtilt_ang = 7;
 
     ue_speed_kmh = cfg.ue_speed_kmh;
@@ -135,30 +139,33 @@ function main_multi(config_path)
         downtilt_ang, 0.5, 1, 1, 0.5 * Nr_v, 0.5 * Nr_h);
 
     % ------------------------------------------------------------------
-    % BS positions: custom or hex-grid
+    % BS positions: custom → linear → hexagonal
     % ------------------------------------------------------------------
+    sectors = cfg.sectors_per_site;
     if isfield(cfg, 'custom_site_positions') && ~isempty(cfg.custom_site_positions)
-        % custom_site_positions is [K x 3] from JSON
         csp = cfg.custom_site_positions;
         if isstruct(csp)
-            % JSON array of {x, y, z} objects
             bs_positions = zeros(3, numel(csp));
             for i = 1:numel(csp)
                 bs_positions(:, i) = [csp(i).x; csp(i).y; csp(i).z];
             end
         else
-            % [K x 3] numeric array
-            bs_positions = csp.';  % transpose to [3 x K]
+            bs_positions = csp.';
             if size(bs_positions, 1) ~= 3
                 bs_positions = bs_positions.';
             end
         end
         K = size(bs_positions, 2);
+        bs_orientations = zeros(3, K);
+        bs_pcis = 0:(K-1);
         fprintf('[main_multi] Using %d custom BS positions\n', K);
     else
-        bs_positions = gen_hex_positions(K, cfg.isd_m, cfg.tx_height_m);
-        fprintf('[main_multi] Generated hex-grid with %d sites, ISD=%.0fm\n', ...
-            K, cfg.isd_m);
+        [bs_positions, bs_orientations, bs_pcis] = gen_topology( ...
+            K, cfg.isd_m, cfg.tx_height_m, sectors, ...
+            cfg.topology_layout, cfg.track_offset_m, cfg.hypercell_size);
+        K = size(bs_positions, 2);
+        fprintf('[main_multi] Generated %s topology: %d cells, ISD=%.0fm\n', ...
+            cfg.topology_layout, K, cfg.isd_m);
     end
 
     % ------------------------------------------------------------------
@@ -173,7 +180,7 @@ function main_multi(config_path)
     s1.show_progress_bars = 0;
 
     % ------------------------------------------------------------------
-    % UE positions: custom or random
+    % UE positions: custom or distribution-based
     % ------------------------------------------------------------------
     if isfield(cfg, 'custom_ue_positions') && ~isempty(cfg.custom_ue_positions)
         cup = cfg.custom_ue_positions;
@@ -190,73 +197,114 @@ function main_multi(config_path)
         end
         no_ue = size(UE_positions, 2);
     else
-        % Drop UEs uniformly within a disk of radius cell_radius_m
-        rho = cfg.cell_radius_m * sqrt(rand(1, no_ue));
-        phi_deg = 360 * rand(1, no_ue) - 180;
-        UE_positions = zeros(3, no_ue);
-        UE_positions(1, :) = rho .* cosd(phi_deg);
-        UE_positions(2, :) = rho .* sind(phi_deg);
-        UE_positions(3, :) = cfg.rx_height_m;
+        UE_positions = place_ues(no_ue, cfg.cell_radius_m, cfg.ue_height_m, ...
+            cfg.ue_distribution, [0; 0], cfg.seed);
     end
+    fprintf('[main_multi] UE distribution: %s  (%d UEs)\n', ...
+        cfg.ue_distribution, no_ue);
 
     % ------------------------------------------------------------------
-    % Generate UE tracks (mobility_mode aware)
+    % HSR detection & mobility
     % ------------------------------------------------------------------
+    mobility_mode = cfg.mobility_mode;
+    is_hsr = strcmpi(cfg.topology_layout, 'linear') && ...
+        any(strcmpi(mobility_mode, {'linear', 'track'}));
+
+    dt_s = cfg.sample_interval_s;
+    ue_trajectories = [];   % [no_ue, no_ss, 3] — filled below if mobile
+    doppler_per_ue = [];    % [no_ue, no_ss]
+    nearest_cells = [];     % [no_ue, no_ss]
+    train_positions = [];   % [no_ue, no_ss, 3] — HSR only
+
+    fprintf('[main_multi] Mobility mode: %s  is_hsr=%d\n', mobility_mode, is_hsr);
+
     clear UE_tracks;
-    if isfield(cfg, 'mobility_mode')
-        mobility_mode = cfg.mobility_mode;
-    else
-        mobility_mode = 'linear';
-    end
-    fprintf('[main_multi] Mobility mode: %s\n', mobility_mode);
+    if is_hsr
+        % Build track waypoints from site X positions, Y=0 (track centreline)
+        site_xs = unique(bs_positions(1, :));
+        site_xs = sort(site_xs);
+        track_waypoints = [site_xs(:), zeros(numel(site_xs), 1)];
 
-    use_trajectory = isfield(cfg, 'custom_ue_positions') && ~isempty(cfg.custom_ue_positions) && no_ue > 1;
-    if use_trajectory
-        % Custom positions: create a SINGLE trajectory track through all
-        % points so QuaDRiGa's spatial consistency model is preserved.
-        origin = UE_positions(:, 1);
-        relative_positions = UE_positions - origin;
+        % Generate base trajectory (train centre)
+        base_traj = generate_track_mobility(track_waypoints, ue_speed_mps, no_ss, dt_s);
+        base_traj(:, 3) = cfg.ue_height_m;
 
-        trk = qd_track();
-        trk.name = 'trajectory';
-        trk.positions = relative_positions;   % [3 x N] relative to start
-        trk.no_snapshots = no_ue;
-        for seg = 1:no_ue
-            trk.scenario{seg} = cfg.scenario;
+        % Generate all UE positions within train body
+        train_positions = generate_train_positions(base_traj, no_ue, ...
+            cfg.train_length_m, cfg.train_width_m, cfg.seed);
+
+        % Override UE_positions with train initial positions
+        for i_ue = 1:no_ue
+            UE_positions(:, i_ue) = squeeze(train_positions(i_ue, 1, :));
         end
 
+        % Store trajectories
+        ue_trajectories = train_positions;  % [no_ue, no_ss, 3]
+
+        % Generate QuaDRiGa tracks from train centre trajectory
         for i_ue = 1:no_ue
+            ue_traj = squeeze(train_positions(i_ue, :, :));  % [no_ss, 3]
+            origin = ue_traj(1, :).';
+            rel_pos = (ue_traj - ue_traj(1, :)).';  % [3 x no_ss]
+
+            trk = qd_track();
+            trk.name = sprintf('user%d', i_ue);
+            trk.positions = rel_pos;
+            trk.no_snapshots = no_ss;
+            trk.scenario{1} = cfg.scenario;
             UE_tracks(1, i_ue) = trk; %#ok<AGROW>
         end
-    else
+
+        % Compute dynamic Doppler for each UE
+        doppler_per_ue = zeros(no_ue, no_ss);
+        nearest_cells = zeros(no_ue, no_ss);
         for i_ue = 1:no_ue
-            trk = generate_ue_track(mobility_mode, track_length, ...
-                cfg.cell_radius_m, s1, cfg.scenario, i_ue);
-            UE_tracks(1, i_ue) = trk; %#ok<AGROW>
+            ue_traj = squeeze(train_positions(i_ue, :, :));
+            [dop, nc] = compute_doppler_dynamic(ue_traj, bs_positions, fc, dt_s);
+            doppler_per_ue(i_ue, :) = dop.';
+            nearest_cells(i_ue, :) = nc.';
+        end
+
+    else
+        % Non-HSR: standard mobility modes
+        use_custom_traj = isfield(cfg, 'custom_ue_positions') && ...
+            ~isempty(cfg.custom_ue_positions) && no_ue > 1;
+        if use_custom_traj
+            origin = UE_positions(:, 1);
+            relative_positions = UE_positions - origin;
+            trk = qd_track();
+            trk.name = 'trajectory';
+            trk.positions = relative_positions;
+            trk.no_snapshots = no_ue;
+            for seg = 1:no_ue
+                trk.scenario{seg} = cfg.scenario;
+            end
+            for i_ue = 1:no_ue
+                UE_tracks(1, i_ue) = trk; %#ok<AGROW>
+            end
+        else
+            for i_ue = 1:no_ue
+                trk = generate_ue_track(mobility_mode, track_length, ...
+                    cfg.cell_radius_m, s1, cfg.scenario, i_ue);
+                UE_tracks(1, i_ue) = trk; %#ok<AGROW>
+            end
         end
     end
 
     % ------------------------------------------------------------------
-    % Allocate output: both ideal and LS-estimated serving channel
+    % Allocate output: serving + all-cell channels
     % ------------------------------------------------------------------
     Hf_serving_ideal = zeros(no_ue, BsAnt, ue_ant, N_RB, no_ss, 'single');
     Hf_serving_est   = zeros(no_ue, BsAnt, ue_ant, N_RB, no_ss, 'single');
+    Hf_all_cells     = zeros(no_ue, K, BsAnt, ue_ant, N_RB, no_ss, 'single');
     serving_cell_ids = zeros(1, no_ue);
-    rsrp_per_cell = zeros(no_ue, K, 'single');   % per-cell |H|^2 mean
+    rsrp_per_cell = zeros(no_ue, K, 'single');
     snr_dB  = zeros(1, no_ue, 'single');
     sir_dB  = zeros(1, no_ue, 'single');
     sinr_dB = zeros(1, no_ue, 'single');
 
-    % BS orientations: for multi-cell sectorized deployment, each site has
-    % 3 sectors pointing at 0deg / 120deg / 240deg azimuth.
-    bs_orientations = zeros(3, K);
-    if K > 1
-        sector_azimuths = [0, 120, 240];  % degrees
-        for k = 1:K
-            sector_idx = mod(k-1, 3) + 1;
-            bs_orientations(3, k) = sector_azimuths(sector_idx) * pi / 180;  % radians
-        end
-    end
+    % BS orientations already set by gen_topology (or custom fallback).
+    % bs_orientations: [3 x K] = [bank; tilt; heading] in radians.
 
     % Physical parameters — scenario-aware TX power defaults
     if isfield(cfg, 'tx_power_dbm')
@@ -268,16 +316,23 @@ function main_multi(config_path)
     else
         Ptx_BS_dBm = 46;
     end
-    Ptx_UE_dBm = 23;
-    Ptx_BS_W = 10^(Ptx_BS_dBm / 10) * 1e-3;      % 39.81 W
-    noise_dBm = -174 + 5 + 10*log10(12 * sc_inter);  % per-RB thermal noise
+    Ptx_UE_dBm = cfg.ue_tx_power_dbm;
+    Ptx_BS_W = 10^(Ptx_BS_dBm / 10) * 1e-3;
+    noise_dBm = -174 + cfg.noise_figure_db + 10*log10(12 * sc_inter);
     noise_W   = 10^(noise_dBm / 10) * 1e-3;
 
-    % SRS configuration for UL channel estimation
+    % SRS configuration for UL channel estimation (with hopping params)
     srs_cfg = struct();
     srs_cfg.n_srs_id = 0;
     srs_cfg.n_cs = 0;
     srs_cfg.tx_power_dBm = Ptx_UE_dBm;
+    srs_cfg.C_SRS = cfg.srs_c_srs;
+    srs_cfg.B_SRS = cfg.srs_b_srs;
+    srs_cfg.b_hop = cfg.srs_b_hop;
+    srs_cfg.n_RRC = cfg.srs_n_rrc;
+    srs_cfg.K_TC = cfg.srs_comb;
+    srs_cfg.T_SRS = cfg.srs_periodicity;
+    srs_cfg.R = 1;
 
     % Channel estimation mode
     if isfield(cfg, 'est_mode')
@@ -311,6 +366,22 @@ function main_multi(config_path)
         dl_sir_dB  = zeros(1, no_ue, 'single');
     end
 
+    % SSB measurement outputs
+    ssb_rsrp   = zeros(no_ue, K, 'single');
+    ssb_rsrq   = zeros(no_ue, K, 'single');
+    ssb_sinr   = zeros(no_ue, K, 'single');
+    ssb_best_beam = zeros(no_ue, K, 'single');
+
+    % SVD precoding outputs
+    w_dl_all = complex(zeros(no_ue, BsAnt, min(cfg.max_rank, min(BsAnt, ue_ant)), N_RB, 'single'));
+    dl_rank_all = zeros(1, no_ue, 'single');
+
+    % Pre-equalization SINR outputs
+    ul_pre_sinr_dB = zeros(1, no_ue, 'single');
+    ul_pre_sinr_per_rb = zeros(no_ue, N_RB, 'single');
+
+    noise_linear = 10^(noise_dBm / 10) * 1e-3;
+
     t0 = tic;
 
     % ------------------------------------------------------------------
@@ -331,6 +402,15 @@ function main_multi(config_path)
             no_ss, BsAnt, ue_ant, Nt_v, Nt_h, device);
         % Hf_per_cell: [K, BsAnt, ue_ant, N_RB, no_ss]
 
+        % Apply train penetration loss (HSR only)
+        if is_hsr && cfg.train_penetration_loss_db > 0
+            pen_loss_amp = 10^(-cfg.train_penetration_loss_db / 20);
+            Hf_per_cell = Hf_per_cell * pen_loss_amp;
+        end
+
+        % Store full K-cell channel matrix for interference computation
+        Hf_all_cells(i_ue, :, :, :, :, :) = Hf_per_cell;
+
         % Re-select serving cell based on strongest mean channel power (RSRP)
         rsrp_vals = zeros(1, K);
         for k = 1:K
@@ -342,18 +422,35 @@ function main_multi(config_path)
         % Store ideal serving channel (ground truth for evaluation)
         Hf_serving_ideal(i_ue, :, :, :, :) = Hf_per_cell(sid, :, :, :, :);
 
+        % SSB beam scanning (all scenarios)
+        [ssb_rsrp_k, ssb_rsrq_k, ssb_sinr_k, ssb_beam_k] = ssb_measurement( ...
+            Hf_per_cell, cfg.num_ssb_beams, noise_linear, bs_pcis);
+        ssb_rsrp(i_ue, :) = ssb_rsrp_k;
+        ssb_rsrq(i_ue, :) = ssb_rsrq_k;
+        ssb_sinr(i_ue, :) = ssb_sinr_k;
+        ssb_best_beam(i_ue, :) = ssb_beam_k;
+
         % Run UL SRS pipeline (when link = UL or BOTH)
         if run_ul
-            [H_est, sinr_srs, sir_srs] = ul_srs_pipeline( ...
+            [H_est, sinr_srs, sir_srs, pre_sinr, pre_sinr_rb] = ul_srs_pipeline( ...
                 Hf_per_cell, sid, srs_cfg, noise_dBm, est_mode);
             Hf_serving_est(i_ue, :, :, :, :) = H_est;
             sinr_dB(i_ue) = single(sinr_srs);
             sir_dB(i_ue)  = single(sir_srs);
+            ul_pre_sinr_dB(i_ue) = single(pre_sinr);
+            ul_pre_sinr_per_rb(i_ue, :) = pre_sinr_rb;
         else
             Hf_serving_est(i_ue, :, :, :, :) = Hf_serving_ideal(i_ue, :, :, :, :);
             sinr_dB(i_ue) = single(0);
             sir_dB(i_ue)  = single(0);
         end
+
+        % SVD precoding (all scenarios, uses UL estimate via TDD reciprocity)
+        H_for_svd = squeeze(Hf_serving_est(i_ue, :, :, :, :));  % [BsAnt, ue_ant, N_RB, no_ss]
+        [w_dl_k, rank_k, ~] = dl_precoding_svd(H_for_svd, cfg.max_rank, cfg.rank_threshold);
+        dl_rank_all(i_ue) = single(rank_k);
+        n_rank = size(w_dl_k, 2);
+        w_dl_all(i_ue, :, 1:n_rank, :) = single(w_dl_k);
 
         % Run DL CSI-RS pipeline (when link = DL or BOTH)
         if run_dl
@@ -377,13 +474,12 @@ function main_multi(config_path)
                 inter_gain = inter_gain + gain_k;
             end
         end
-        % DL SNR (reference, uses BS Tx power)
         rx_serv = Ptx_BS_W * serving_gain;
         snr_dB(i_ue) = single(10*log10(max(rx_serv / noise_W, 1e-10)));
 
         if mod(i_ue, 10) == 0 || i_ue == no_ue
-            fprintf('[main_multi] UE %d/%d  SINR=%.1f dB  SIR=%.1f dB  (%.1fs)\n', ...
-                i_ue, no_ue, sinr_dB(i_ue), sir_dB(i_ue), toc(t0));
+            fprintf('[main_multi] UE %d/%d  SINR=%.1f dB  SIR=%.1f dB  rank=%d  (%.1fs)\n', ...
+                i_ue, no_ue, sinr_dB(i_ue), sir_dB(i_ue), rank_k, toc(t0));
         end
     end
 
@@ -416,9 +512,29 @@ function main_multi(config_path)
     meta.Ptx_BS_dBm = Ptx_BS_dBm;
     meta.Ptx_UE_dBm = Ptx_UE_dBm;
     meta.noise_dBm = noise_dBm;
+    meta.noise_figure_db = cfg.noise_figure_db;
     meta.est_mode = est_mode;
     meta.link = link_mode;
-    if isfield(cfg, 'tdd_pattern'); meta.tdd_pattern = cfg.tdd_pattern; end
+    meta.tdd_pattern = cfg.tdd_pattern;
+    meta.topology_layout = cfg.topology_layout;
+    meta.sectors_per_site = cfg.sectors_per_site;
+    meta.track_offset_m = cfg.track_offset_m;
+    meta.hypercell_size = cfg.hypercell_size;
+    meta.ue_distribution = cfg.ue_distribution;
+    meta.channel_model = cfg.channel_model;
+    meta.mobility_mode = cfg.mobility_mode;
+    meta.sample_interval_s = cfg.sample_interval_s;
+    meta.train_penetration_loss_db = cfg.train_penetration_loss_db;
+    meta.train_length_m = cfg.train_length_m;
+    meta.train_width_m = cfg.train_width_m;
+    meta.bs_pcis = bs_pcis;
+    meta.is_hsr = is_hsr;
+    meta.num_ssb_beams = cfg.num_ssb_beams;
+    meta.max_rank = cfg.max_rank;
+    meta.rank_threshold = cfg.rank_threshold;
+    meta.srs_c_srs = cfg.srs_c_srs;
+    meta.srs_b_srs = cfg.srs_b_srs;
+    meta.srs_b_hop = cfg.srs_b_hop;
 
     % ------------------------------------------------------------------
     % Save output
@@ -431,10 +547,20 @@ function main_multi(config_path)
     end
     fullFilePath = fullfile(cfg.output_dir, fileName);
 
-    save_vars = {'Hf_serving_est', 'Hf_serving_ideal', 'rsrp_per_cell', ...
-                 'snr_dB', 'sir_dB', 'sinr_dB', 'meta'};
+    save_vars = {'Hf_serving_est', 'Hf_serving_ideal', 'Hf_all_cells', ...
+                 'rsrp_per_cell', 'snr_dB', 'sir_dB', 'sinr_dB', ...
+                 'ssb_rsrp', 'ssb_rsrq', 'ssb_sinr', 'ssb_best_beam', ...
+                 'w_dl_all', 'dl_rank_all', ...
+                 'ul_pre_sinr_dB', 'ul_pre_sinr_per_rb', ...
+                 'meta'};
     if run_dl
         save_vars = [save_vars, {'Hf_dl_est', 'dl_sinr_dB', 'dl_sir_dB'}];
+    end
+    if ~isempty(ue_trajectories)
+        save_vars = [save_vars, {'ue_trajectories'}];
+    end
+    if ~isempty(doppler_per_ue)
+        save_vars = [save_vars, {'doppler_per_ue', 'nearest_cells'}];
     end
     save(fullFilePath, save_vars{:}, '-v7');
 
@@ -456,6 +582,10 @@ end
 
 function cfg = apply_defaults(cfg)
 %APPLY_DEFAULTS  Fill missing JSON fields with sensible defaults.
+%   Covers ALL parameters from the frontend CollectWizard to ensure full
+%   parity with internal_sim and sionna_rt data sources.
+
+    % --- Basic ---
     if ~isfield(cfg, 'num_cells');          cfg.num_cells = 1; end
     if ~isfield(cfg, 'num_ues');            cfg.num_ues = 200; end
     if ~isfield(cfg, 'num_snapshots');      cfg.num_snapshots = 20; end
@@ -465,17 +595,74 @@ function cfg = apply_defaults(cfg)
     if ~isfield(cfg, 'tx_height_m');        cfg.tx_height_m = 25; end
     if ~isfield(cfg, 'rx_height_m');        cfg.rx_height_m = 1.5; end
     if ~isfield(cfg, 'cell_radius_m');      cfg.cell_radius_m = 200; end
-    if ~isfield(cfg, 'ue_speed_kmh');       cfg.ue_speed_kmh = 100; end
-    if ~isfield(cfg, 'bs_ant_v');           cfg.bs_ant_v = 4; end
-    if ~isfield(cfg, 'bs_ant_h');           cfg.bs_ant_h = 8; end
-    if ~isfield(cfg, 'ue_ant_v');           cfg.ue_ant_v = 2; end
-    if ~isfield(cfg, 'ue_ant_h');           cfg.ue_ant_h = 2; end
     if ~isfield(cfg, 'output_dir');         cfg.output_dir = 'htt_v2_3gppmmw'; end
     if ~isfield(cfg, 'seed');               cfg.seed = 12345; end
+
+    % --- Antenna arrays ---
+    if ~isfield(cfg, 'bs_ant_v');           cfg.bs_ant_v = 4; end
+    if ~isfield(cfg, 'bs_ant_h');           cfg.bs_ant_h = 8; end
+    if ~isfield(cfg, 'bs_ant_p');           cfg.bs_ant_p = 1; end
+    if ~isfield(cfg, 'ue_ant_v');           cfg.ue_ant_v = 2; end
+    if ~isfield(cfg, 'ue_ant_h');           cfg.ue_ant_h = 2; end
+    if ~isfield(cfg, 'ue_ant_p');           cfg.ue_ant_p = 1; end
+    if ~isfield(cfg, 'xpd_db');             cfg.xpd_db = 8.0; end
+
+    % --- Topology (all scenarios) ---
+    if ~isfield(cfg, 'topology_layout');    cfg.topology_layout = 'hexagonal'; end
+    if ~isfield(cfg, 'sectors_per_site');   cfg.sectors_per_site = 1; end
+    if ~isfield(cfg, 'track_offset_m');     cfg.track_offset_m = 80; end
+    if ~isfield(cfg, 'hypercell_size');     cfg.hypercell_size = 1; end
+
+    % --- UE distribution (all scenarios) ---
+    if ~isfield(cfg, 'ue_distribution');    cfg.ue_distribution = 'uniform'; end
+    if ~isfield(cfg, 'ue_height_m');        cfg.ue_height_m = cfg.rx_height_m; end
+
+    % --- Mobility (all scenarios) ---
+    if ~isfield(cfg, 'mobility_mode');      cfg.mobility_mode = 'linear'; end
+    if ~isfield(cfg, 'ue_speed_kmh');       cfg.ue_speed_kmh = 100; end
+    if ~isfield(cfg, 'sample_interval_s');  cfg.sample_interval_s = 0.5e-3; end
+
+    % --- HSR-specific ---
+    if ~isfield(cfg, 'train_penetration_loss_db'); cfg.train_penetration_loss_db = 0; end
+    if ~isfield(cfg, 'train_length_m');     cfg.train_length_m = 400; end
+    if ~isfield(cfg, 'train_width_m');      cfg.train_width_m = 3.4; end
+
+    % --- Channel model ---
+    if ~isfield(cfg, 'channel_model');      cfg.channel_model = 'TDL-C'; end
+
+    % --- Link direction & estimation ---
     if ~isfield(cfg, 'link');               cfg.link = 'UL'; end
     if ~isfield(cfg, 'est_mode');           cfg.est_mode = 'ls_linear'; end
     if ~isfield(cfg, 'tdd_pattern');        cfg.tdd_pattern = 'DDDSU'; end
+    if ~isfield(cfg, 'pilot_type_ul');      cfg.pilot_type_ul = 'srs_zc'; end
+    if ~isfield(cfg, 'pilot_type_dl');      cfg.pilot_type_dl = 'csi_rs_gold'; end
+
+    % --- SRS configuration (3GPP TS 38.211) ---
+    if ~isfield(cfg, 'srs_c_srs');          cfg.srs_c_srs = 3; end
+    if ~isfield(cfg, 'srs_b_srs');          cfg.srs_b_srs = 1; end
+    if ~isfield(cfg, 'srs_b_hop');          cfg.srs_b_hop = 0; end
+    if ~isfield(cfg, 'srs_n_rrc');          cfg.srs_n_rrc = 0; end
+    if ~isfield(cfg, 'srs_comb');           cfg.srs_comb = 2; end
+    if ~isfield(cfg, 'srs_periodicity');    cfg.srs_periodicity = 10; end
+    if ~isfield(cfg, 'srs_group_hopping');  cfg.srs_group_hopping = false; end
+    if ~isfield(cfg, 'srs_sequence_hopping'); cfg.srs_sequence_hopping = false; end
+
+    % --- SSB & precoding ---
+    if ~isfield(cfg, 'num_ssb_beams');      cfg.num_ssb_beams = 8; end
+    if ~isfield(cfg, 'max_rank');           cfg.max_rank = 4; end
+    if ~isfield(cfg, 'rank_threshold');     cfg.rank_threshold = 0.1; end
+
+    % --- Interference ---
     if ~isfield(cfg, 'num_interfering_ues'); cfg.num_interfering_ues = 3; end
+
+    % --- Power ---
+    if ~isfield(cfg, 'ue_tx_power_dbm');    cfg.ue_tx_power_dbm = 23; end
+    if ~isfield(cfg, 'noise_figure_db');    cfg.noise_figure_db = 7.0; end
+
+    % --- Bandwidth / SCS ---
+    if ~isfield(cfg, 'n_rb');               cfg.n_rb = []; end   % auto-compute if empty
+    if ~isfield(cfg, 'sc_inter');           cfg.sc_inter = 30e3; end
+    if ~isfield(cfg, 'bandwidth_hz');       cfg.bandwidth_hz = 100e6; end
 end
 
 
@@ -503,10 +690,17 @@ function trk = generate_ue_track(mobility_mode, track_length, cell_radius_m, sim
 %   Supported modes:
 %     'static'           - stationary UE (zero-length track)
 %     'linear'           - straight line at constant speed
-%     'random_walk'      - correlated random walk (piecewise linear segments with turning)
+%     'random_walk'      - correlated random walk
 %     'random_waypoint'  - random waypoint within cell radius
+%     'track'            - handled externally via HSR path (fallback to linear)
 
     switch lower(mobility_mode)
+        case 'track'
+            % Track mode is handled by HSR path in main loop.
+            % If we reach here, fall back to linear.
+            trk = qd_track.generate('linear', track_length);
+            trk.name = sprintf('user%d', ue_id);
+            trk.interpolate('distance', 1 / sim_params.samples_per_meter, [], [], 1);
         case 'static'
             trk = qd_track.generate('linear', 1e-3);
             trk.name = sprintf('user%d', ue_id);

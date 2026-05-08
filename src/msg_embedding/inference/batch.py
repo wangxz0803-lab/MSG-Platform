@@ -1,4 +1,4 @@
-"""Batch inference runner for MSG-Embedding."""
+"""Batch inference runner for ChannelHub."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Alembic environment for MSG-Embedding backend."""
+"""Alembic environment for ChannelHub backend."""
 
 from __future__ import annotations
 

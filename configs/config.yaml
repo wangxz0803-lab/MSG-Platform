@@ -1,5 +1,5 @@
 # =============================================================================
-# MSG-Embedding — Top-level Hydra Config
+# ChannelHub — Top-level Hydra Config
 # =============================================================================
 #
 # This file is the root Hydra config. It pulls in the four main config groups

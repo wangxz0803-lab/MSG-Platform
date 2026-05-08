@@ -22,7 +22,8 @@ from ..settings import get_settings
 _log = get_logger(__name__)
 
 VALID_JOB_TYPES = frozenset(
-    {"simulate", "convert", "bridge", "train", "eval", "infer", "export", "report"}
+    {"simulate", "convert", "bridge", "eval", "infer", "export", "report",
+     "dataset_export"}
 )
 
 

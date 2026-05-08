@@ -4,7 +4,7 @@ This module defines the single canonical schema that every DataSource (QuaDRiGa
 legacy, QuaDRiGa multi-cell, Sionna RT, internal simulator, live field data)
 must emit. Downstream feature extraction, training and evaluation all consume
 ``ChannelSample`` instances, so this contract is the narrow-waist of the
-MSG-Embedding data pipeline.
+ChannelHub data pipeline.
 
 Design notes
 ------------
@@ -64,6 +64,26 @@ SourceType = Literal[
 ]
 
 _SNR_BOUNDS = (-50.0, 50.0)
+
+_HDF5_COMPLEX_FIELDS = (
+    "h_serving_true", "h_serving_est", "h_interferers",
+    "interference_signal", "h_ul_true", "h_ul_est",
+    "h_dl_true", "h_dl_est", "w_dl",
+)
+_HDF5_FLOAT_ARRAY_FIELDS = ("ue_position", "ul_pre_sinr_per_rb")
+_HDF5_SCALAR_FIELDS = (
+    "noise_power_dBm", "snr_dB", "sir_dB", "sinr_dB",
+    "link", "channel_est_mode", "serving_cell_id",
+    "channel_model", "tdd_pattern", "link_pairing",
+    "ul_sir_dB", "dl_sir_dB", "num_interfering_ues",
+    "ul_pre_sinr_dB", "ul_snr_dB", "ul_sinr_dB", "dl_rank",
+    "source", "sample_id",
+)
+_HDF5_LIST_FIELDS = (
+    "ssb_rsrp_dBm", "ssb_rsrq_dB", "ssb_sinr_dB",
+    "ssb_best_beam_idx", "ssb_pcis",
+    "ssb_rsrp_true_dBm", "ssb_sinr_true_dB",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +241,24 @@ class ChannelSample(BaseModel):
     ssb_sinr_true_dB: list[float] | None = Field(
         default=None,
         description="Per-cell SS-SINR under ideal conditions.",
+    )
+
+    # --- UL Pre-SINR (SRS-based, as measured at BS) -----------------------
+    ul_pre_sinr_dB: float | None = Field(
+        default=None,
+        description="Wideband UL Pre-SINR (dB) estimated from SRS measurement.",
+    )
+    ul_pre_sinr_per_rb: NdArray | None = Field(
+        default=None,
+        description="[RB] Per-RB UL Pre-SINR (dB) from SRS measurement.",
+    )
+    ul_snr_dB: float | None = Field(
+        default=None,
+        description="UL SNR (dB) using UE TX power for link budget.",
+    )
+    ul_sinr_dB: float | None = Field(
+        default=None,
+        description="UL SINR (dB) using UE TX power for link budget.",
     )
 
     # --- DL precoding (SRS-based beamforming) ----------------------------
@@ -536,6 +574,146 @@ class ChannelSample(BaseModel):
             "meta_json": self.meta,
         }
 
+    # ------------------------------------------------------------------
+    # HDF5 serialisation (for data export to external training platforms)
+    # ------------------------------------------------------------------
+    def to_hdf5_group(self, grp: Any) -> None:
+        """Write this sample into an open ``h5py.Group``."""
+        import json as _json
+
+        grp.attrs["contract_version"] = CONTRACT_VERSION
+        grp.attrs["created_at"] = self.created_at.astimezone(timezone.utc).isoformat()
+        grp.attrs["meta_json"] = _json.dumps(self.meta, ensure_ascii=False)
+
+        for name in _HDF5_COMPLEX_FIELDS:
+            arr = getattr(self, name)
+            if arr is not None:
+                ds = grp.create_dataset(name, data=arr, compression="gzip", compression_opts=4)
+                ds.attrs["dtype"] = "complex64"
+
+        for name in _HDF5_FLOAT_ARRAY_FIELDS:
+            arr = getattr(self, name)
+            if arr is not None:
+                ds = grp.create_dataset(name, data=arr, compression="gzip", compression_opts=4)
+                ds.attrs["dtype"] = str(arr.dtype)
+
+        for name in _HDF5_SCALAR_FIELDS:
+            val = getattr(self, name)
+            if val is not None:
+                grp.attrs[name] = val
+
+        for name in _HDF5_LIST_FIELDS:
+            val = getattr(self, name)
+            if val is not None:
+                grp.create_dataset(name, data=np.asarray(val))
+
+    @classmethod
+    def from_hdf5_group(cls, grp: Any) -> ChannelSample:
+        """Reconstruct a sample from an ``h5py.Group``."""
+        import json as _json
+
+        kwargs: dict[str, Any] = {}
+
+        for name in _HDF5_COMPLEX_FIELDS:
+            if name in grp:
+                kwargs[name] = np.asarray(grp[name], dtype=np.complex64)
+
+        for name in _HDF5_FLOAT_ARRAY_FIELDS:
+            if name in grp:
+                orig_dtype = grp[name].attrs.get("dtype", "float64")
+                kwargs[name] = np.asarray(grp[name], dtype=orig_dtype)
+
+        for name in _HDF5_SCALAR_FIELDS:
+            if name in grp.attrs:
+                kwargs[name] = grp.attrs[name]
+                if isinstance(kwargs[name], (np.integer,)):
+                    kwargs[name] = int(kwargs[name])
+                elif isinstance(kwargs[name], (np.floating,)):
+                    kwargs[name] = float(kwargs[name])
+
+        for name in _HDF5_LIST_FIELDS:
+            if name in grp:
+                arr = np.asarray(grp[name])
+                if arr.dtype.kind == "f":
+                    kwargs[name] = [float(x) for x in arr]
+                else:
+                    kwargs[name] = [int(x) for x in arr]
+
+        created_str = grp.attrs.get("created_at")
+        if created_str:
+            kwargs["created_at"] = datetime.fromisoformat(created_str)
+        else:
+            kwargs["created_at"] = datetime.now(timezone.utc)
+
+        meta_str = grp.attrs.get("meta_json", "{}")
+        kwargs["meta"] = _json.loads(meta_str)
+
+        return cls(**kwargs)
+
+    @classmethod
+    def from_hdf5_group_partial(
+        cls,
+        grp: Any,
+        complex_fields: tuple[str, ...] | None = None,
+        float_array_fields: tuple[str, ...] | None = None,
+        list_fields: tuple[str, ...] | None = None,
+    ) -> ChannelSample:
+        """Load a sample reading only the requested array fields.
+
+        Unspecified heavy fields default to *None*, saving RAM.
+        Scalar fields are always loaded (negligible size).
+        Uses ``model_construct`` to bypass validation for partial data.
+        """
+        import json as _json
+
+        load_cx = set(complex_fields) if complex_fields is not None else set(_HDF5_COMPLEX_FIELDS)
+        load_fa = set(float_array_fields) if float_array_fields is not None else set(_HDF5_FLOAT_ARRAY_FIELDS)
+        load_li = set(list_fields) if list_fields is not None else set(_HDF5_LIST_FIELDS)
+
+        kwargs: dict[str, Any] = {}
+
+        for name in _HDF5_COMPLEX_FIELDS:
+            if name in load_cx and name in grp:
+                kwargs[name] = np.asarray(grp[name], dtype=np.complex64)
+            else:
+                kwargs[name] = None
+
+        for name in _HDF5_FLOAT_ARRAY_FIELDS:
+            if name in load_fa and name in grp:
+                orig_dtype = grp[name].attrs.get("dtype", "float64")
+                kwargs[name] = np.asarray(grp[name], dtype=orig_dtype)
+            else:
+                kwargs[name] = None
+
+        for name in _HDF5_SCALAR_FIELDS:
+            if name in grp.attrs:
+                val = grp.attrs[name]
+                if isinstance(val, (np.integer,)):
+                    val = int(val)
+                elif isinstance(val, (np.floating,)):
+                    val = float(val)
+                kwargs[name] = val
+
+        for name in _HDF5_LIST_FIELDS:
+            if name in load_li and name in grp:
+                arr = np.asarray(grp[name])
+                if arr.dtype.kind == "f":
+                    kwargs[name] = [float(x) for x in arr]
+                else:
+                    kwargs[name] = [int(x) for x in arr]
+            else:
+                kwargs[name] = None
+
+        created_str = grp.attrs.get("created_at")
+        kwargs["created_at"] = (
+            datetime.fromisoformat(created_str)
+            if created_str
+            else datetime.now(timezone.utc)
+        )
+        kwargs["meta"] = _json.loads(grp.attrs.get("meta_json", "{}"))
+
+        return cls.model_construct(**kwargs)
+
     @classmethod
     def from_pt_file(cls, path: Path) -> ChannelSample:
         """Load a pickled ``.pt`` file that stores a :meth:`to_dict` payload.
@@ -565,4 +743,13 @@ class ChannelSample(BaseModel):
         raise TypeError(f"{path}: expected ChannelSample or dict, got {type(payload).__name__}")
 
 
-__all__ = ["ChannelSample", "LinkType", "LinkPairing", "ChannelEstMode", "SourceType"]
+CONTRACT_VERSION = "1.0"
+
+__all__ = [
+    "ChannelSample",
+    "LinkType",
+    "LinkPairing",
+    "ChannelEstMode",
+    "SourceType",
+    "CONTRACT_VERSION",
+]

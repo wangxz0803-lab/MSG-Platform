@@ -23,7 +23,7 @@ const MENU_ITEMS = [
   { key: '/collect', icon: <PlusCircleOutlined />, label: '数据采集' },
   { key: '/process', icon: <ToolOutlined />, label: '数据处理' },
   { key: '/jobs', icon: <ThunderboltOutlined />, label: '任务' },
-  { key: '/runs', icon: <ExperimentOutlined />, label: '训练记录' },
+  { key: '/runs', icon: <ExperimentOutlined />, label: '运行记录' },
   { key: '/compare', icon: <DiffOutlined />, label: '对比' },
   { key: '/models', icon: <DeploymentUnitOutlined />, label: '模型' },
 ];
@@ -77,7 +77,7 @@ export default function AppSider() {
         }}
       >
         <AppstoreOutlined style={{ marginRight: collapsed ? 0 : 8 }} />
-        {collapsed ? '' : 'MSG-Embedding'}
+        {collapsed ? '' : 'ChannelHub'}
       </div>
       <Menu
         theme="dark"

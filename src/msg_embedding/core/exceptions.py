@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 class MSGError(Exception):
-    """Base for all MSG-Embedding application errors."""
+    """Base for all ChannelHub application errors."""
 
 
 class ConfigError(MSGError):

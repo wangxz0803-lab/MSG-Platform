@@ -425,6 +425,242 @@ def estimate_channel_with_interference(
     return InterferenceEstResult(h_est=h_est, sir_dB=sir_dB)
 
 
+def estimate_channel_hop_concat(
+    h_serving_true: np.ndarray,
+    h_interferers: np.ndarray | None,
+    interferer_cell_ids: list[int] | None,
+    direction: Direction,
+    snr_dB: float,
+    rng: np.random.Generator,
+    *,
+    srs_resource_cfg: object,
+    current_slot: int,
+    srs_symbol: int,
+    doppler_hz: float,
+    subcarrier_spacing_hz: float,
+    total_rb: int,
+    serving_cell_id: int = 0,
+    num_interfering_ues: int = 3,
+    srs_group_hopping: bool = False,
+    srs_sequence_hopping: bool = False,
+    srs_K_TC: int = 2,
+    h_interferers_ul_per_ue: list[np.ndarray] | None = None,
+) -> InterferenceEstResult:
+    """Per-hop LS estimation with direct frequency-domain concatenation.
+
+    Instead of accumulating all hopping-cycle RBs and doing one interpolated
+    LS pass, this function estimates each hop independently at its own time
+    instant, then stitches the subband estimates together.
+
+    For past hops the channel is decorrelated from the current snapshot using
+    the Jakes model:  ``h_past = ρ·h_now + √(1−ρ²)·n``, where
+    ``ρ = J₀(2π f_d Δt)``.  Interference and noise are independent per hop.
+
+    Falls back to ``ls_linear`` when hopping is disabled (cycle length ≤ 1).
+    """
+    from scipy.special import j0 as bessel_j0
+
+    from msg_embedding.channel_est.ls import ls_estimate
+    from msg_embedding.data.sources.internal_sim import _generate_pilots_srs
+    from msg_embedding.ref_signals.srs import (
+        srs_hopping_cycle_length,
+        srs_rb_indices as _srs_rb_indices,
+    )
+
+    T, RB, Ant_tx, Ant_rx = h_serving_true.shape
+    cycle_len = srs_hopping_cycle_length(srs_resource_cfg)  # type: ignore[arg-type]
+
+    if cycle_len <= 1:
+        from msg_embedding.ref_signals.srs import srs_accumulated_rb_indices
+        acc_rbs = srs_accumulated_rb_indices(
+            srs_resource_cfg, current_slot, srs_symbol, total_rb,  # type: ignore[arg-type]
+        )
+        pilots = _generate_pilots_srs(
+            total_rb, serving_cell_id,
+            slot=current_slot, symbol=srs_symbol,
+            group_hopping=srs_group_hopping,
+            sequence_hopping=srs_sequence_hopping,
+            K_TC=srs_K_TC,
+            srs_num_rb=len(acc_rbs),
+        )
+        return estimate_channel_with_interference(
+            h_serving_true=h_serving_true,
+            h_interferers=h_interferers,
+            pilots_serving=pilots,
+            interferer_cell_ids=interferer_cell_ids,
+            direction=direction,
+            snr_dB=snr_dB,
+            rng=rng,
+            est_mode="ls_linear",
+            serving_cell_id=serving_cell_id,
+            num_interfering_ues=num_interfering_ues,
+            srs_rb_indices=acc_rbs,
+            srs_slot=current_slot,
+            srs_symbol=srs_symbol,
+            srs_group_hopping=srs_group_hopping,
+            srs_sequence_hopping=srs_sequence_hopping,
+            srs_K_TC=srs_K_TC,
+            srs_num_rb=len(acc_rbs),
+            h_interferers_ul_per_ue=h_interferers_ul_per_ue,
+        )
+
+    mu = round(math.log2(max(subcarrier_spacing_hz, 15e3) / 15e3))
+    slot_duration_s = 1e-3 / (2 ** mu)
+    T_SRS = srs_resource_cfg.T_SRS  # type: ignore[attr-defined]
+
+    noise_std = 10.0 ** (-snr_dB / 20.0) / math.sqrt(2.0)
+    t_idx = min(srs_symbol, T - 1)
+
+    h_est_subbands: dict[int, np.ndarray] = {}
+    p_serving_acc = 0.0
+    p_intf_acc = 0.0
+    n_pilot_total = 0
+
+    K_minus_1 = h_interferers.shape[0] if h_interferers is not None and len(h_interferers) > 0 else 0
+    _has_per_ue = (
+        h_interferers_ul_per_ue is not None
+        and len(h_interferers_ul_per_ue) >= K_minus_1
+        and K_minus_1 > 0
+    )
+
+    for hop_i in range(cycle_len):
+        hop_slot = current_slot - (cycle_len - 1 - hop_i) * T_SRS
+        hop_rbs = _srs_rb_indices(
+            srs_resource_cfg, hop_slot, srs_symbol, total_rb,  # type: ignore[arg-type]
+        )
+        if len(hop_rbs) == 0:
+            continue
+        n_hop_rb = len(hop_rbs)
+
+        delta_slots = (cycle_len - 1 - hop_i) * T_SRS
+        delta_t = delta_slots * slot_duration_s
+
+        if delta_t > 0 and doppler_hz > 0:
+            rho = float(bessel_j0(2.0 * np.pi * doppler_hz * delta_t))
+            rho = max(-1.0, min(1.0, rho))
+            sqrt_comp = math.sqrt(max(0.0, 1.0 - rho ** 2))
+        else:
+            rho, sqrt_comp = 1.0, 0.0
+
+        def _decorrelate(h: np.ndarray) -> np.ndarray:
+            if sqrt_comp == 0.0:
+                return h.astype(np.complex128)
+            inn = (
+                rng.standard_normal(h.shape)
+                + 1j * rng.standard_normal(h.shape)
+            ) / math.sqrt(2.0)
+            return (rho * h + sqrt_comp * inn).astype(np.complex128)
+
+        h_hop = _decorrelate(h_serving_true)
+        h_at_pilot = h_hop[t_idx, hop_rbs]  # [n_hop_rb, Ant_tx, Ant_rx]
+
+        pilots_hop = _generate_pilots_srs(
+            total_rb, serving_cell_id,
+            slot=hop_slot, symbol=srs_symbol,
+            group_hopping=srs_group_hopping,
+            sequence_hopping=srs_sequence_hopping,
+            K_TC=srs_K_TC,
+            srs_num_rb=n_hop_rb,
+        )
+        X_s = pilots_hop[:n_hop_rb, None, None]  # [n_hop_rb, 1, 1]
+        Y_s = h_at_pilot * X_s  # [n_hop_rb, Ant_tx, Ant_rx]
+
+        intf_hop = np.zeros_like(h_at_pilot, dtype=np.complex128)
+        if K_minus_1 > 0 and direction == "UL":
+            for cell_k in range(K_minus_1):
+                intf_cell_id = (
+                    interferer_cell_ids[cell_k]
+                    if interferer_cell_ids is not None and cell_k < len(interferer_cell_ids)
+                    else serving_cell_id + cell_k + 1
+                )
+                if _has_per_ue:
+                    n_avail = h_interferers_ul_per_ue[cell_k].shape[0]  # type: ignore[index]
+                else:
+                    n_avail = num_interfering_ues
+                n_active = int(rng.integers(0, n_avail + 1))
+                active_ues = (
+                    rng.choice(n_avail, size=n_active, replace=False)
+                    if n_active > 0 else np.array([], dtype=np.intp)
+                )
+                for ue_idx in active_ues:
+                    if _has_per_ue:
+                        h_ue_full = _decorrelate(h_interferers_ul_per_ue[cell_k][ue_idx])  # type: ignore[index]
+                    else:
+                        h_ue_full = _decorrelate(h_interferers[cell_k])  # type: ignore[index]
+                    h_ue_at = h_ue_full[t_idx, hop_rbs]
+                    intf_pilots = _generate_interferer_pilots_srs(
+                        total_rb, intf_cell_id, int(ue_idx),
+                        slot=hop_slot, symbol=srs_symbol,
+                        group_hopping=srs_group_hopping,
+                        sequence_hopping=srs_sequence_hopping,
+                        K_TC=srs_K_TC,
+                        srs_num_rb=n_hop_rb,
+                    )
+                    X_i = intf_pilots[:n_hop_rb, None, None]
+                    intf_hop += h_ue_at * X_i
+
+        elif K_minus_1 > 0 and direction == "DL":
+            n_active_cells = int(rng.integers(0, K_minus_1 + 1))
+            active_cells = (
+                rng.choice(K_minus_1, size=n_active_cells, replace=False)
+                if n_active_cells > 0 else np.array([], dtype=np.intp)
+            )
+            for cell_k in active_cells:
+                h_intf_hop = _decorrelate(h_interferers[cell_k])  # type: ignore[index]
+                h_intf_at = h_intf_hop[t_idx, hop_rbs]
+                intf_cell_id = (
+                    interferer_cell_ids[cell_k]
+                    if interferer_cell_ids is not None and cell_k < len(interferer_cell_ids)
+                    else serving_cell_id + cell_k + 1
+                )
+                intf_pilots_dl = _generate_interferer_pilots_csirs(total_rb, intf_cell_id)
+                X_i = intf_pilots_dl[hop_rbs, None, None]
+                intf_hop += h_intf_at * X_i
+
+        noise_hop = noise_std * (
+            rng.standard_normal(h_at_pilot.shape)
+            + 1j * rng.standard_normal(h_at_pilot.shape)
+        )
+
+        Y_total = Y_s + intf_hop + noise_hop
+
+        p_serving_acc += float(np.sum(np.abs(Y_s) ** 2))
+        p_intf_acc += float(np.sum(np.abs(intf_hop) ** 2))
+        n_pilot_total += n_hop_rb
+
+        Y_flat = Y_total.reshape(n_hop_rb, Ant_tx * Ant_rx)
+        X_flat = pilots_hop[:n_hop_rb].astype(np.complex128)
+        H_ls = ls_estimate(Y_flat, X_flat, dtype="complex64")  # [n_hop_rb, Ant_tx*Ant_rx]
+        H_ls = H_ls.reshape(n_hop_rb, Ant_tx, Ant_rx)
+
+        for local_i, rb_idx in enumerate(hop_rbs):
+            h_est_subbands[int(rb_idx)] = H_ls[local_i]
+
+    sir_dB: float | None = None
+    if p_intf_acc > 1e-30 and n_pilot_total > 0:
+        sir_dB = float(10.0 * math.log10(max(p_serving_acc / p_intf_acc, 1e-15)))
+        sir_dB = max(-50.0, min(50.0, sir_dB))
+    elif K_minus_1 > 0:
+        sir_dB = 49.9
+
+    covered_rbs = sorted(h_est_subbands.keys())
+    h_full = np.zeros((RB, Ant_tx, Ant_rx), dtype=np.complex64)
+    for rb in covered_rbs:
+        h_full[rb] = h_est_subbands[rb]
+
+    if covered_rbs:
+        rb_min, rb_max = covered_rbs[0], covered_rbs[-1]
+        for rb in range(0, rb_min):
+            h_full[rb] = h_full[rb_min]
+        for rb in range(rb_max + 1, RB):
+            h_full[rb] = h_full[rb_max]
+
+    h_est_out = np.broadcast_to(h_full[None, :, :, :], (T, RB, Ant_tx, Ant_rx)).copy()
+    h_est_out = h_est_out.astype(np.complex64)
+
+    return InterferenceEstResult(h_est=h_est_out, sir_dB=sir_dB)
+
+
 def estimate_paired_channels(
     h_dl_true: np.ndarray,
     h_interferers_dl: np.ndarray | None,
@@ -447,6 +683,9 @@ def estimate_paired_channels(
     dl_symbol_mask: np.ndarray | None = None,
     ul_symbol_mask: np.ndarray | None = None,
     srs_rb_indices: np.ndarray | None = None,
+    srs_resource_cfg: object | None = None,
+    doppler_hz: float = 0.0,
+    ul_snr_dB: float | None = None,
 ) -> PairedChannelResult:
     """Generate paired UL+DL estimated channels from a single DL ground truth.
 
@@ -484,20 +723,35 @@ def estimate_paired_channels(
     if num_rb is None:
         num_rb = RB
 
-    # -- TDD reciprocity: H_UL = conj(H_DL^T) --
+    # -- TDD reciprocity: H_UL = conj(H_DL^T) in physical [T, RB, UE, BS] layout --
+    # Internal representation keeps UL as [T, RB, UE_ant, BS_ant] for estimation;
+    # output transpose to contract [T, RB, BS_ant, UE_ant] happens at return.
     h_ul_true = np.conj(h_dl_true.transpose(0, 1, 3, 2))
     rng_ul = np.random.Generator(rng.bit_generator.jumped())  # type: ignore[attr-defined]
+    # Calibration errors are smooth in frequency — generate low-rank noise
+    # then interpolate to full bandwidth for realistic spectral correlation.
+    _corr_len = max(RB // 8, 2)
+    _n_knots = max(RB // _corr_len, 2)
+    _ul_dim2, _ul_dim3 = UE_ant, BS_ant  # match h_ul_true [T, RB, UE, BS]
+    _knot_shape = (T, _n_knots, _ul_dim2, _ul_dim3)
+    _knot_noise = (
+        rng_ul.standard_normal(_knot_shape) + 1j * rng_ul.standard_normal(_knot_shape)
+    ) / math.sqrt(2.0)
+    # Linear interpolation from knots to full RB grid
+    _knot_pos = np.linspace(0, RB - 1, _n_knots)
+    _full_pos = np.arange(RB)
+    _smooth_noise = np.zeros((T, RB, _ul_dim2, _ul_dim3), dtype=np.complex128)
+    for t_idx in range(T):
+        for a in range(_ul_dim2):
+            for u in range(_ul_dim3):
+                _real = np.interp(_full_pos, _knot_pos, _knot_noise[t_idx, :, a, u].real)
+                _imag = np.interp(_full_pos, _knot_pos, _knot_noise[t_idx, :, a, u].imag)
+                _smooth_noise[t_idx, :, a, u] = _real + 1j * _imag
     h_ul_true = (
-        h_ul_true
-        + reciprocity_noise_scale
-        * (
-            rng_ul.standard_normal(h_ul_true.shape)
-            + 1j * rng_ul.standard_normal(h_ul_true.shape)
-        )
-        / math.sqrt(2.0)
+        h_ul_true + reciprocity_noise_scale * _smooth_noise
     ).astype(np.complex64)
 
-    # Interferers in UL domain (conjugate transpose of DL interferers)
+    # Interferers in UL domain: conj-transpose to [K, T, RB, UE, BS] (physical UL)
     h_interferers_ul: np.ndarray | None = None
     if h_interferers_dl is not None and len(h_interferers_dl) > 0:
         h_interferers_ul = np.conj(
@@ -528,33 +782,58 @@ def estimate_paired_channels(
     pilots_csirs = _generate_pilots_csirs(num_rb, serving_cell_id, slot=slot_idx, symbol=_csirs_symbol)
 
     # -- UL estimation (BS receives SRS with multi-UE interference) --
+    _ul_snr = ul_snr_dB if ul_snr_dB is not None else snr_dB
     rng_ul_est = np.random.Generator(rng.bit_generator.jumped())  # type: ignore[attr-defined]
-    ul_result = estimate_channel_with_interference(
-        h_serving_true=h_ul_true,
-        h_interferers=h_interferers_ul,
-        pilots_serving=pilots_srs,
-        interferer_cell_ids=interferer_cell_ids,
-        direction="UL",
-        snr_dB=snr_dB,
-        rng=rng_ul_est,
-        est_mode=est_mode,
-        tau_rms_ns=tau_rms_ns,
-        subcarrier_spacing=subcarrier_spacing,
-        serving_cell_id=serving_cell_id,
-        num_interfering_ues=num_interfering_ues,
-        valid_symbol_mask=ul_symbol_mask,
-        srs_rb_indices=srs_rb_indices,
-        srs_slot=slot_idx,
-        srs_symbol=_srs_symbol,
-        srs_group_hopping=srs_group_hopping,
-        srs_sequence_hopping=srs_sequence_hopping,
-        srs_K_TC=srs_comb,
-        srs_num_rb=_srs_num_rb,
-        h_interferers_ul_per_ue=h_interferers_ul_per_ue,
-    )
+    if est_mode == "ls_hop_concat" and srs_resource_cfg is not None:
+        ul_result = estimate_channel_hop_concat(
+            h_serving_true=h_ul_true,
+            h_interferers=h_interferers_ul,
+            interferer_cell_ids=interferer_cell_ids,
+            direction="UL",
+            snr_dB=_ul_snr,
+            rng=rng_ul_est,
+            srs_resource_cfg=srs_resource_cfg,
+            current_slot=slot_idx,
+            srs_symbol=_srs_symbol,
+            doppler_hz=doppler_hz,
+            subcarrier_spacing_hz=float(subcarrier_spacing),
+            total_rb=num_rb,
+            serving_cell_id=serving_cell_id,
+            num_interfering_ues=num_interfering_ues,
+            srs_group_hopping=srs_group_hopping,
+            srs_sequence_hopping=srs_sequence_hopping,
+            srs_K_TC=srs_comb,
+            h_interferers_ul_per_ue=h_interferers_ul_per_ue,
+        )
+    else:
+        ul_result = estimate_channel_with_interference(
+            h_serving_true=h_ul_true,
+            h_interferers=h_interferers_ul,
+            pilots_serving=pilots_srs,
+            interferer_cell_ids=interferer_cell_ids,
+            direction="UL",
+            snr_dB=_ul_snr,
+            rng=rng_ul_est,
+            est_mode=est_mode,
+            tau_rms_ns=tau_rms_ns,
+            subcarrier_spacing=subcarrier_spacing,
+            serving_cell_id=serving_cell_id,
+            num_interfering_ues=num_interfering_ues,
+            valid_symbol_mask=ul_symbol_mask,
+            srs_rb_indices=srs_rb_indices,
+            srs_slot=slot_idx,
+            srs_symbol=_srs_symbol,
+            srs_group_hopping=srs_group_hopping,
+            srs_sequence_hopping=srs_sequence_hopping,
+            srs_K_TC=srs_comb,
+            srs_num_rb=_srs_num_rb,
+            h_interferers_ul_per_ue=h_interferers_ul_per_ue,
+        )
 
     # -- DL estimation (UE receives CSI-RS with multi-cell interference) --
-    # DL uses CSI-RS which covers full band — no srs_rb_indices
+    # DL uses CSI-RS which covers full band — no srs_rb_indices.
+    # hop_concat only applies to SRS (UL); DL always uses ls_linear.
+    _dl_est_mode = "ls_linear" if est_mode == "ls_hop_concat" else est_mode
     rng_dl_est = np.random.Generator(rng.bit_generator.jumped())  # type: ignore[attr-defined]
     dl_result = estimate_channel_with_interference(
         h_serving_true=h_dl_true,
@@ -564,7 +843,7 @@ def estimate_paired_channels(
         direction="DL",
         snr_dB=snr_dB,
         rng=rng_dl_est,
-        est_mode=est_mode,
+        est_mode=_dl_est_mode,
         tau_rms_ns=tau_rms_ns,
         subcarrier_spacing=subcarrier_spacing,
         serving_cell_id=serving_cell_id,

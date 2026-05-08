@@ -29,6 +29,10 @@ class SampleSchema(BaseModel):
     status: str | None = None
     shard_id: str | None = None
     run_id: str | None = None
+    stage: str | None = Field(default="raw")
+    serving_cell_id: int | None = None
+    channel_est_mode: str | None = None
+    bridged_path: str | None = None
 
 
 class DatasetSummary(BaseModel):
@@ -44,6 +48,7 @@ class DatasetSummary(BaseModel):
     dl_sir_mean: float | None = None
     links: list[str] = Field(default_factory=list)
     has_paired: bool = False
+    stage_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class DatasetListResponse(BaseModel):
@@ -68,3 +73,65 @@ class DatasetCollectRequest(BaseModel):
     ]
     config_overrides: dict[str, Any] = Field(default_factory=dict)
     output_dir: str | None = None
+
+
+# --- Split management -------------------------------------------------------
+
+class SplitComputeRequest(BaseModel):
+    """Payload for ``POST /api/datasets/split``."""
+
+    strategy: Literal["random", "by_position", "by_beam"] = "by_position"
+    seed: int = 0
+    ratios: list[float] = Field(default=[0.8, 0.1, 0.1], min_length=3, max_length=3)
+    lock: bool = Field(
+        default=True,
+        description="If True, lock the split after computing so test/val sets are immutable.",
+    )
+
+
+class SplitInfoResponse(BaseModel):
+    """Response for ``GET /api/datasets/split/status``."""
+
+    locked: bool
+    version: int
+    strategy: str | None = None
+    seed: int | None = None
+    ratios: list[float] | None = None
+    locked_at: str | None = None
+    locked_test_uuids: int = 0
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+# --- Data export -------------------------------------------------------------
+
+class DatasetExportRequest(BaseModel):
+    """Payload for ``POST /api/datasets/export``."""
+
+    format: Literal["hdf5", "webdataset", "pt_dir"] = "hdf5"
+    split: str | None = Field(default="train", description="Split to export (train/val/test/None=all)")
+    source_filter: str | None = None
+    link_filter: Literal["UL", "DL"] | None = None
+    min_snr: float | None = None
+    max_snr: float | None = None
+    export_name: str | None = None
+    shard_size: int = Field(default=1000, ge=100, le=50000)
+    include_interferers: bool = False
+
+
+class DatasetExportStatusResponse(BaseModel):
+    """Response for ``GET /api/datasets/exports``."""
+
+    exports: list[dict[str, Any]]
+
+
+class ExportFileInfo(BaseModel):
+    """Single export package info."""
+
+    name: str
+    format: str
+    num_samples: int
+    total_bytes: int
+    split_version: int
+    created_at: str
+    path: str
+    download_url: str | None = None

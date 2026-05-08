@@ -27,12 +27,12 @@ const JOB_STATUSES: JobStatus[] = ['queued', 'running', 'completed', 'failed', '
 const JOB_TYPES: JobType[] = [
   'convert',
   'bridge',
-  'train',
   'eval',
   'infer',
   'export',
   'report',
   'simulate',
+  'dataset_export',
 ];
 
 export default function Jobs() {

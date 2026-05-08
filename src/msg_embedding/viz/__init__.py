@@ -1,4 +1,4 @@
-"""Visualization helpers for MSG-Embedding."""
+"""Visualization helpers for ChannelHub."""
 
 from __future__ import annotations
 

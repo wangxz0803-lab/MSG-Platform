@@ -14,6 +14,7 @@ interface Props {
   bounds: Bounds;
   cellRadius: number;
   readOnly?: boolean;
+  topologyLayout?: 'hexagonal' | 'linear';
   onSiteDrag?: (sites: SitePosition[]) => void;
   onUEDrag?: (ues: UEPosition[]) => void;
 }
@@ -49,6 +50,7 @@ export default function TopologyCanvas({
   bounds,
   cellRadius,
   readOnly = false,
+  topologyLayout = 'hexagonal',
   onSiteDrag,
   onUEDrag,
 }: Props) {
@@ -219,19 +221,49 @@ export default function TopologyCanvas({
         </defs>
         <rect width={size.w} height={size.h} fill="url(#grid)" />
 
-        {/* Hex cells */}
-        {uniqueSiteCenters.map((c) => {
-          const [sx, sy] = transform.toSvg(c.x, c.y);
-          return (
-            <polygon
-              key={`hex-${c.siteId}`}
-              points={hexPoints(sx, sy, hexR)}
-              fill={HEX_FILL}
-              stroke={HEX_STROKE}
-              strokeWidth={1}
-            />
-          );
-        })}
+        {/* Topology cells */}
+        {topologyLayout === 'linear' ? (
+          <>
+            {/* Track centerline */}
+            {(() => {
+              const xs = uniqueSiteCenters.map(c => c.x);
+              const minX = Math.min(...xs) - cellRadius;
+              const maxX = Math.max(...xs) + cellRadius;
+              const [x1, y1] = transform.toSvg(minX, 0);
+              const [x2, y2] = transform.toSvg(maxX, 0);
+              return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#fa541c" strokeWidth={2} strokeDasharray="8 4" opacity={0.6} />;
+            })()}
+            {/* Coverage circles around each site */}
+            {uniqueSiteCenters.map((c) => {
+              const [sx, sy] = transform.toSvg(c.x, c.y);
+              return (
+                <circle
+                  key={`cov-${c.siteId}`}
+                  cx={sx}
+                  cy={sy}
+                  r={hexR * 0.8}
+                  fill="rgba(22,119,255,0.04)"
+                  stroke="rgba(22,119,255,0.2)"
+                  strokeWidth={1}
+                  strokeDasharray="4 2"
+                />
+              );
+            })}
+          </>
+        ) : (
+          uniqueSiteCenters.map((c) => {
+            const [sx, sy] = transform.toSvg(c.x, c.y);
+            return (
+              <polygon
+                key={`hex-${c.siteId}`}
+                points={hexPoints(sx, sy, hexR)}
+                fill={HEX_FILL}
+                stroke={HEX_STROKE}
+                strokeWidth={1}
+              />
+            );
+          })
+        )}
 
         {/* Sector lines */}
         {localSites.map((s) => {
@@ -253,6 +285,26 @@ export default function TopologyCanvas({
             />
           );
         })}
+
+        {/* Train outline for linear topology */}
+        {topologyLayout === 'linear' && localUEs.length > 1 && (() => {
+          const uxs = localUEs.map(u => u.x);
+          const uys = localUEs.map(u => u.y);
+          const pad = 20;
+          const [x1, y1] = transform.toSvg(Math.min(...uxs) - pad, Math.max(...uys) + pad);
+          const [x2, y2] = transform.toSvg(Math.max(...uxs) + pad, Math.min(...uys) - pad);
+          const w = x2 - x1;
+          const h = y2 - y1;
+          return (
+            <g>
+              <rect x={x1} y={y1} width={w} height={h} rx={4}
+                fill="rgba(250,84,28,0.06)" stroke="#fa541c" strokeWidth={1.5} strokeDasharray="6 3" />
+              <text x={x1 + w / 2} y={y1 - 5} textAnchor="middle" fontSize={10} fill="#fa541c" fontWeight={600}>
+                🚄 列车 ({localUEs.length} UE)
+              </text>
+            </g>
+          );
+        })()}
 
         {/* UE dots */}
         {localUEs.map((u) => {
@@ -312,13 +364,19 @@ export default function TopologyCanvas({
 
         {/* Legend */}
         <g transform={`translate(${size.w - 130}, 12)`}>
-          <rect x={0} y={0} width={120} height={readOnly ? 52 : 76} rx={4} fill="rgba(255,255,255,0.9)" stroke="#e8e8e8" />
+          <rect x={0} y={0} width={120} height={topologyLayout === 'linear' ? (readOnly ? 72 : 92) : (readOnly ? 52 : 76)} rx={4} fill="rgba(255,255,255,0.9)" stroke="#e8e8e8" />
           <circle cx={14} cy={16} r={5} fill="#1677ff" stroke="white" strokeWidth={1.5} />
           <text x={26} y={20} fontSize={11} fill="#333">基站</text>
           <circle cx={14} cy={36} r={3} fill={UE_COLOR} opacity={0.6} />
           <text x={26} y={40} fontSize={11} fill="#333">终端 (UE)</text>
+          {topologyLayout === 'linear' && (
+            <>
+              <rect x={8} y={48} width={12} height={8} rx={1} fill="rgba(250,84,28,0.1)" stroke="#fa541c" strokeWidth={1} />
+              <text x={26} y={56} fontSize={11} fill="#333">列车</text>
+            </>
+          )}
           {!readOnly && (
-            <text x={8} y={60} fontSize={9} fill="#999">
+            <text x={8} y={topologyLayout === 'linear' ? 78 : 60} fontSize={9} fill="#999">
               拖拽可调整位置
             </text>
           )}

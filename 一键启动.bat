@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 >nul
-title MSG平台 - 一键启动
+title ChannelHub - 一键启动
 echo ============================================
-echo   MSG-Embedding 5G信道仿真平台
+echo   ChannelHub · 信道数据工场
 echo ============================================
 echo.
 

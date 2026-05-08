@@ -77,6 +77,11 @@ def _row_to_kwargs(row: dict[str, Any]) -> dict[str, Any]:
         "run_id": _as_str(row.get("run_id")),
         "path": _as_str(row.get("path")),
         "split": _as_str(row.get("split")),
+        "stage": _as_str(row.get("stage")) or "raw",
+        "serving_cell_id": _as_int(row.get("serving_cell_id")),
+        "channel_est_mode": _as_str(row.get("channel_est_mode")),
+        "ue_x": _as_float(row.get("ue_x")),
+        "ue_y": _as_float(row.get("ue_y")),
     }
 
 

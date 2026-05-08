@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MSG-Embedding research platform web UI",
+  "description": "ChannelHub 信道数据工场 platform web UI",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

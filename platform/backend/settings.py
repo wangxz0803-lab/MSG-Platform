@@ -26,7 +26,7 @@ class BackendSettings(BaseSettings):
     bridge_out_dir: str = Field(default=str(_MSG_REPO_ROOT / "bridge_out"))
     manifest_path: str = Field(default=str(_MSG_REPO_ROOT / "bridge_out" / "manifest.parquet"))
     db_url: str = Field(default=f"sqlite:///{_MSG_REPO_ROOT}/platform/backend/msg.db")
-    api_port: int = Field(default=8001)
+    api_port: int = Field(default=8000)
     worker_queue_dir: str = Field(
         default=str(_MSG_REPO_ROOT / "platform" / "worker" / "queue")
     )
@@ -39,6 +39,7 @@ class BackendSettings(BaseSettings):
     worker_cancel_dir: str = Field(
         default=str(_MSG_REPO_ROOT / "platform" / "worker" / "cancel")
     )
+    exports_dir: str = Field(default=str(_MSG_REPO_ROOT / "exports"))
     redis_url: str = Field(default="redis://localhost:6379/0")
     configs_dir: str = Field(default=str(_MSG_REPO_ROOT / "configs"))
     schema_path: str = Field(default=str(_MSG_REPO_ROOT / "configs" / "_schema.json"))
@@ -81,6 +82,10 @@ class BackendSettings(BaseSettings):
     @property
     def worker_cancel_path(self) -> Path:
         return Path(self.worker_cancel_dir)
+
+    @property
+    def exports_path(self) -> Path:
+        return Path(self.exports_dir)
 
     @property
     def configs_path(self) -> Path:

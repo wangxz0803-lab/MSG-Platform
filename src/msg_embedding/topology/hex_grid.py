@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-__all__ = ["CellSite", "make_hex_grid", "hex_ring_positions"]
+__all__ = ["CellSite", "make_hex_grid", "make_linear_grid", "hex_ring_positions"]
 
 
 @dataclass
@@ -144,6 +144,79 @@ def make_hex_grid(
                     position=pos.copy(),
                     sector_id=sector_id,
                     azimuth_deg=float(az),
+                    tx_height_m=float(tx_height_m),
+                    pci=-1,
+                    scenario=scenario,
+                )
+            )
+
+    return sites
+
+
+# ------------------------------------------------------------------
+# Linear (track-side) layout for HSR
+# ------------------------------------------------------------------
+
+
+def make_linear_grid(
+    num_sites: int,
+    isd_m: float,
+    sectors: int = 3,
+    tx_height_m: float = 30.0,
+    scenario: str = "UMa_LOS",
+    track_azimuth_deg: float = 0.0,
+    track_offset_m: float = 80.0,
+) -> list[CellSite]:
+    """Build sites along a straight rail track (staggered on both sides).
+
+    Sites alternate between the two sides of the track, offset by
+    *track_offset_m* perpendicular to the track direction.  Even-indexed
+    sites are placed on the +normal side, odd-indexed on the -normal side.
+
+    The ISD is measured **along the track** (not the straight-line distance
+    between staggered neighbours).  Sector boresights are oriented toward
+    the track centre for the primary sector, ensuring coverage of the
+    corridor.
+
+    Returns a list of :class:`CellSite` with ``pci = -1``.
+    """
+    if num_sites < 1:
+        raise ValueError(f"num_sites must be >= 1, got {num_sites}")
+    if sectors not in (1, 3):
+        raise ValueError(f"sectors must be 1 or 3, got {sectors}")
+
+    az_rad = np.deg2rad(track_azimuth_deg)
+    normal_rad = az_rad + np.pi / 2
+
+    total_len = (num_sites - 1) * isd_m
+    start_x = -total_len / 2 * np.cos(az_rad)
+    start_y = -total_len / 2 * np.sin(az_rad)
+
+    sites: list[CellSite] = []
+    for i in range(num_sites):
+        cx = start_x + i * isd_m * np.cos(az_rad)
+        cy = start_y + i * isd_m * np.sin(az_rad)
+
+        side = 1.0 if i % 2 == 0 else -1.0
+        ox = side * track_offset_m * np.cos(normal_rad)
+        oy = side * track_offset_m * np.sin(normal_rad)
+        x = cx + ox
+        y = cy + oy
+
+        toward_track_deg = track_azimuth_deg + (270.0 if side > 0 else 90.0)
+        if sectors == 1:
+            azimuths = (toward_track_deg,)
+        else:
+            azimuths = (toward_track_deg, toward_track_deg + 120.0, toward_track_deg + 240.0)
+
+        pos = np.array([x, y, tx_height_m], dtype=np.float64)
+        for sector_id, az in enumerate(azimuths):
+            sites.append(
+                CellSite(
+                    site_id=i,
+                    position=pos.copy(),
+                    sector_id=sector_id,
+                    azimuth_deg=float(az % 360),
                     tx_height_m=float(tx_height_m),
                     pci=-1,
                     scenario=scenario,

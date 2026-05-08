@@ -12,7 +12,7 @@ from ..settings import get_settings
 
 router = APIRouter(prefix="/api/configs", tags=["configs"])
 
-_VALID_SECTIONS = {"data", "model", "train", "eval", "infer", "all"}
+_VALID_SECTIONS = {"data", "model", "eval", "infer", "all"}
 
 
 def _read_json_schema() -> dict[str, Any]:
@@ -56,7 +56,7 @@ def _load_yaml_defaults(cfg_dir: Path) -> dict[str, Any]:
         import yaml  # type: ignore[import-untyped]
     except ImportError:
         return out
-    for group in ("data", "model", "train", "eval", "infer"):
+    for group in ("data", "model", "eval", "infer"):
         p = cfg_dir / group / "default.yaml"
         if p.exists():
             try:

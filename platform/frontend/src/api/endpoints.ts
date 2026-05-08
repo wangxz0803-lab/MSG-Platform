@@ -8,22 +8,31 @@ import type {
   CreateCollectRequest,
   CreateJobRequest,
   CreateJobResponse,
+  DatasetExportRequest,
   DatasetFilters,
   DatasetsResponse,
   ExportModelRequest,
+  ExportsResponse,
   HealthResponse,
   Job,
   JobFilters,
   JobLogs,
   JobProgress,
   JobsResponse,
+  LeaderboardResponse,
+  ModelEvalRequest,
   ModelFilters,
+  ModelInferRequest,
+  ModelMeta,
   ModelsResponse,
+  ModelUploadResponse,
   Run,
   RunFilters,
   RunMetrics,
   RunsResponse,
   SamplesResponse,
+  SplitComputeRequest,
+  SplitInfoResponse,
   TopologyPreviewRequest,
   TopologyPreviewResponse,
 } from './types';
@@ -53,6 +62,82 @@ export async function getDatasetSamples(
 
 export async function collectDataset(req: CreateCollectRequest): Promise<CreateJobResponse> {
   const { data } = await apiClient.post<CreateJobResponse>('/api/datasets/collect', req);
+  return data;
+}
+
+// --- Split management -------------------------------------------------------
+export async function getSplitStatus(): Promise<SplitInfoResponse> {
+  const { data } = await apiClient.get<SplitInfoResponse>('/api/datasets/split/status');
+  return data;
+}
+
+export async function computeAndLockSplit(req: SplitComputeRequest): Promise<SplitInfoResponse> {
+  const { data } = await apiClient.post<SplitInfoResponse>('/api/datasets/split', req);
+  return data;
+}
+
+export async function unlockSplit(): Promise<void> {
+  await apiClient.post('/api/datasets/split/unlock');
+}
+
+// --- Dataset export ---------------------------------------------------------
+export async function exportDataset(req: DatasetExportRequest): Promise<CreateJobResponse> {
+  const { data } = await apiClient.post<CreateJobResponse>('/api/datasets/export', req);
+  return data;
+}
+
+export async function listExports(): Promise<ExportsResponse> {
+  const { data } = await apiClient.get<ExportsResponse>('/api/datasets/exports');
+  return data;
+}
+
+// --- Model upload -----------------------------------------------------------
+export async function uploadModel(file: File, runId?: string, tags?: string): Promise<ModelUploadResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  if (runId) form.append('run_id', runId);
+  if (tags) form.append('tags', tags);
+  const { data } = await apiClient.post<ModelUploadResponse>('/api/models/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000,
+  });
+  return data;
+}
+
+export async function evaluateModel(
+  runId: string,
+  req: ModelEvalRequest = {},
+): Promise<CreateJobResponse> {
+  const { data } = await apiClient.post<CreateJobResponse>(
+    `/api/models/${encodeURIComponent(runId)}/evaluate`,
+    req,
+  );
+  return data;
+}
+
+// --- Model inference --------------------------------------------------------
+export async function inferModel(
+  runId: string,
+  req: ModelInferRequest = {},
+): Promise<CreateJobResponse> {
+  const { data } = await apiClient.post<CreateJobResponse>(
+    `/api/models/${encodeURIComponent(runId)}/infer`,
+    req,
+  );
+  return data;
+}
+
+// --- Model meta -------------------------------------------------------------
+export async function getModelMeta(runId: string): Promise<ModelMeta> {
+  const { data } = await apiClient.get<ModelMeta>(
+    `/api/models/${encodeURIComponent(runId)}/meta`,
+  );
+  return data;
+}
+
+// --- Leaderboard ------------------------------------------------------------
+export async function getLeaderboard(): Promise<LeaderboardResponse> {
+  const { data } = await apiClient.get<LeaderboardResponse>('/api/models/leaderboard');
   return data;
 }
 

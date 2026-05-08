@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 import os
 import subprocess
 import uuid
@@ -160,7 +161,7 @@ class QuadrigaRealSource(DataSource):
         else:
             self.link = "UL"
         raw_est = str(cfg.get("channel_est_mode", "ls_linear")).lower()
-        self.channel_est_mode: str = raw_est if raw_est in ("ideal", "ls_linear", "ls_mmse") else "ls_linear"
+        self.channel_est_mode: str = raw_est if raw_est in ("ideal", "ls_linear", "ls_mmse", "ls_hop_concat") else "ls_linear"
         self.pilot_type_ul: str = str(cfg.get("pilot_type_ul", cfg.get("pilot_type", "srs_zc")))
         self.pilot_type_dl: str = str(cfg.get("pilot_type_dl", cfg.get("pilot_type", "csi_rs_gold")))
         self.num_interfering_ues: int = int(cfg.get("num_interfering_ues", 3))
@@ -215,29 +216,124 @@ class QuadrigaRealSource(DataSource):
             self.matlab_dir = repo / "matlab"
         self.mat_dir = Path(str(cfg.get("mat_dir", str(_project_root / "artifacts" / "quadriga_real_mat"))))
 
+        # -- Panel array (dual-polarization) -----------------------------------
+        _bs_panel_raw = cfg.get("bs_panel", None)
+        _ue_panel_raw = cfg.get("ue_panel", None)
+        if _bs_panel_raw is not None:
+            _bp = [int(x) for x in _bs_panel_raw]
+            self.bs_panel_h: int = _bp[0]
+            self.bs_panel_v: int = _bp[1]
+            self.bs_panel_p: int = _bp[2]
+        else:
+            self.bs_panel_h = int(cfg.get("bs_ant_h", 8))
+            self.bs_panel_v = int(cfg.get("bs_ant_v", 4))
+            self.bs_panel_p = 1
+        if _ue_panel_raw is not None:
+            _up = [int(x) for x in _ue_panel_raw]
+            self.ue_panel_h: int = _up[0]
+            self.ue_panel_v: int = _up[1]
+            self.ue_panel_p: int = _up[2]
+        else:
+            self.ue_panel_h = int(cfg.get("ue_ant_h", 2))
+            self.ue_panel_v = int(cfg.get("ue_ant_v", 1))
+            self.ue_panel_p = 1
+        self.xpd_db: float = float(cfg.get("xpd_db", 8.0))
+        self.ue_tx_power_dbm: float = float(cfg.get("ue_tx_power_dbm", 23.0))
+
+        # -- Additional parameters for full parity with internal_sim --------
+        self.topology_layout: str = str(cfg.get("topology_layout", "hexagonal"))
+        self.sectors_per_site: int = int(cfg.get("sectors_per_site", 1))
+        self.track_offset_m: float = float(cfg.get("track_offset_m", 80.0))
+        self.hypercell_size: int = int(cfg.get("hypercell_size", 1))
+        self.ue_distribution: str = str(cfg.get("ue_distribution", "uniform"))
+        self.ue_height_m: float = float(cfg.get("ue_height_m", cfg.get("rx_height_m", 1.5)))
+        self.mobility_mode: str = str(cfg.get("mobility_mode", "linear"))
+        self.ue_speed_kmh: float = float(cfg.get("ue_speed_kmh", 3.0))
+        self.sample_interval_s: float = float(cfg.get("sample_interval_s", 0.5e-3))
+        self.train_penetration_loss_db: float = float(cfg.get("train_penetration_loss_db", 0.0))
+        self.train_length_m: float = float(cfg.get("train_length_m", 400.0))
+        self.train_width_m: float = float(cfg.get("train_width_m", 3.4))
+        self.channel_model: str = str(cfg.get("channel_model", "TDL-C"))
+        self.noise_figure_db: float = float(cfg.get("noise_figure_db", 7.0))
+        self.num_ssb_beams: int = int(cfg.get("num_ssb_beams", 8))
+        self.max_rank: int = int(cfg.get("max_rank", 4))
+        self.rank_threshold: float = float(cfg.get("rank_threshold", 0.1))
+        self.apply_interferer_precoding: bool = bool(cfg.get("apply_interferer_precoding", True))
+        self.store_interferer_channels: bool = bool(cfg.get("store_interferer_channels", False))
+        self.tx_height_m: float = float(cfg.get("tx_height_m", 25.0))
+        self.rx_height_m: float = float(cfg.get("rx_height_m", 1.5))
+        self.cell_radius_m: float = float(cfg.get("cell_radius_m", 250.0))
+
         self._matlab_config = {
+            # Basic
             "num_cells": self.num_cells,
             "num_ues": self.ues_per_shard,
             "num_snapshots": self.num_snapshots,
             "carrier_freq_hz": self.carrier_freq_hz,
             "scenario": self.scenario,
             "isd_m": self.isd_m,
-            "tx_height_m": int(cfg.get("tx_height_m", 25)),
-            "rx_height_m": float(cfg.get("rx_height_m", 1.5)),
-            "cell_radius_m": int(cfg.get("cell_radius_m", 250)),
-            "ue_speed_kmh": int(cfg.get("ue_speed_kmh", 3)),
-            "mobility_mode": str(cfg.get("mobility_mode", "linear")),
-            "bs_ant_v": int(cfg.get("bs_ant_v", 4)),
-            "bs_ant_h": int(cfg.get("bs_ant_h", 8)),
-            "ue_ant_v": int(cfg.get("ue_ant_v", 1)),
-            "ue_ant_h": int(cfg.get("ue_ant_h", 2)),
+            "tx_height_m": self.tx_height_m,
+            "rx_height_m": self.rx_height_m,
+            "cell_radius_m": self.cell_radius_m,
+            # Antenna
+            "bs_ant_v": self.bs_panel_v,
+            "bs_ant_h": self.bs_panel_h,
+            "bs_ant_p": self.bs_panel_p,
+            "ue_ant_v": self.ue_panel_v,
+            "ue_ant_h": self.ue_panel_h,
+            "ue_ant_p": self.ue_panel_p,
+            "xpd_db": self.xpd_db,
+            # Bandwidth
             "n_rb": self._num_rb,
             "sc_inter": int(self.subcarrier_spacing),
-            "output_dir": str(self.mat_dir),
+            "bandwidth_hz": self.bandwidth_hz,
+            # Topology (all scenarios)
+            "topology_layout": self.topology_layout,
+            "sectors_per_site": self.sectors_per_site,
+            "track_offset_m": self.track_offset_m,
+            "hypercell_size": self.hypercell_size,
+            # UE distribution
+            "ue_distribution": self.ue_distribution,
+            "ue_height_m": self.ue_height_m,
+            # Mobility
+            "mobility_mode": self.mobility_mode,
+            "ue_speed_kmh": self.ue_speed_kmh,
+            "sample_interval_s": self.sample_interval_s,
+            # HSR
+            "train_penetration_loss_db": self.train_penetration_loss_db,
+            "train_length_m": self.train_length_m,
+            "train_width_m": self.train_width_m,
+            # Channel model
+            "channel_model": self.channel_model,
+            # Estimation
             "link": self.link,
             "est_mode": self.channel_est_mode,
             "tdd_pattern": self.tdd_pattern_name,
+            "pilot_type_ul": self.pilot_type_ul,
+            "pilot_type_dl": self.pilot_type_dl,
+            # SRS
+            "srs_c_srs": self.srs_c_srs,
+            "srs_b_srs": self.srs_b_srs,
+            "srs_b_hop": self.srs_b_hop,
+            "srs_n_rrc": self.srs_n_rrc,
+            "srs_comb": self.srs_comb,
+            "srs_periodicity": self.srs_periodicity,
+            "srs_group_hopping": self.srs_group_hopping,
+            "srs_sequence_hopping": self.srs_sequence_hopping,
+            # SSB & precoding
+            "num_ssb_beams": self.num_ssb_beams,
+            "max_rank": self.max_rank,
+            "rank_threshold": self.rank_threshold,
+            # Interference
             "num_interfering_ues": self.num_interfering_ues,
+            # Power
+            "ue_tx_power_dbm": self.ue_tx_power_dbm,
+            "noise_figure_db": self.noise_figure_db,
+            # Output
+            "output_dir": str(self.mat_dir),
+            # Custom positions
+            "custom_site_positions": cfg.get("custom_site_positions", None),
+            "custom_ue_positions": cfg.get("custom_ue_positions", None),
         }
 
     def _generate_shard(self, shard_id: int) -> bool:
@@ -322,6 +418,18 @@ class QuadrigaRealSource(DataSource):
             ptx_dBm = float(_meta_get(meta, "Ptx_BS_dBm", _meta_get(meta, "Ptx_dBm", 46.0)))
             ptx_per_re = ptx_dBm - 10.0 * np.log10(n_re)
 
+            # New MATLAB outputs (Phase 3-4)
+            Hf_all = d.get("Hf_all_cells")  # [no_ue, K, BsAnt, ue_ant, N_RB, no_ss]
+            mat_ssb_rsrp = d.get("ssb_rsrp")        # [no_ue, K] dBm
+            mat_ssb_rsrq = d.get("ssb_rsrq")        # [no_ue, K] dB
+            mat_ssb_sinr = d.get("ssb_sinr")        # [no_ue, K] dB
+            mat_ssb_beam = d.get("ssb_best_beam")   # [no_ue, K] 1-based
+            mat_w_dl = d.get("w_dl_all")             # [no_ue, BsAnt, rank, N_RB]
+            mat_dl_rank = d.get("dl_rank_all")       # [1, no_ue]
+            mat_pre_sinr = d.get("ul_pre_sinr_dB")  # [1, no_ue]
+            mat_pre_sinr_rb = d.get("ul_pre_sinr_per_rb")  # [no_ue, N_RB]
+            mat_bs_pcis = _meta_get(meta, "bs_pcis", np.arange(K))
+
             for i_ue in range(no_ue):
                 if yielded >= self.num_samples:
                     return
@@ -346,10 +454,93 @@ class QuadrigaRealSource(DataSource):
                 except (IndexError, TypeError):
                     ue_p = np.array([0.0, 0.0, 1.5])
 
-                rsrp_row = mat_rsrp[i_ue] if i_ue < mat_rsrp.shape[0] else np.zeros(K)
-                ssb_rsrp_list = [
-                    float(ptx_per_re + 10 * np.log10(max(float(g), 1e-30))) for g in rsrp_row
-                ]
+                # --- SSB measurements from MATLAB ---
+                if mat_ssb_rsrp is not None and i_ue < mat_ssb_rsrp.shape[0]:
+                    ssb_rsrp_list = [float(v) for v in mat_ssb_rsrp[i_ue]]
+                else:
+                    rsrp_row = mat_rsrp[i_ue] if i_ue < mat_rsrp.shape[0] else np.zeros(K)
+                    ssb_rsrp_list = [
+                        float(ptx_per_re + 10 * np.log10(max(float(g), 1e-30))) for g in rsrp_row
+                    ]
+                ssb_rsrq_list: list[float] | None = None
+                ssb_sinr_list: list[float] | None = None
+                ssb_beam_list: list[int] | None = None
+                ssb_pcis_list: list[int] | None = None
+                if mat_ssb_rsrq is not None and i_ue < mat_ssb_rsrq.shape[0]:
+                    ssb_rsrq_list = [float(v) for v in mat_ssb_rsrq[i_ue]]
+                if mat_ssb_sinr is not None and i_ue < mat_ssb_sinr.shape[0]:
+                    ssb_sinr_list = [float(v) for v in mat_ssb_sinr[i_ue]]
+                if mat_ssb_beam is not None and i_ue < mat_ssb_beam.shape[0]:
+                    ssb_beam_list = [int(v) for v in mat_ssb_beam[i_ue]]
+                if mat_bs_pcis is not None:
+                    ssb_pcis_list = [int(v) for v in np.asarray(mat_bs_pcis).flatten()[:K]]
+
+                # --- h_interferers from Hf_all_cells ---
+                h_interferers_arr: np.ndarray | None = None
+                _scids_raw = _meta_get(meta, "serving_cell_ids", None)
+                _scids_arr = np.asarray(_scids_raw).flatten() if _scids_raw is not None else np.zeros(no_ue)
+                sid_0 = int(_scids_arr[min(i_ue, len(_scids_arr) - 1)]) - 1  # 0-based
+                if sid_0 < 0:
+                    sid_0 = 0
+                if Hf_all is not None and K > 1:
+                    intf_mask = [k for k in range(K) if k != sid_0]
+                    # Hf_all[i_ue]: [K, BsAnt, ue_ant, N_RB, no_ss]
+                    h_intf_mat = Hf_all[i_ue][intf_mask]  # [K-1, BsAnt, ue_ant, N_RB, no_ss]
+                    # Transpose to contract: [K-1, T, RB, BS_ant, UE_ant]
+                    h_interferers_arr = np.transpose(h_intf_mat, (0, 4, 3, 1, 2))
+                    if raw_gain > 0:
+                        h_interferers_arr = h_interferers_arr / scale
+
+                # --- Per-interferer DL precoding projection ---
+                _intf_ranks: list[int] | None = None
+                if h_interferers_arr is not None and self.apply_interferer_precoding:
+                    from msg_embedding.phy_sim.precoding import project_interference_channels
+                    _h_own_proxies = [
+                        h_interferers_arr[ki] for ki in range(h_interferers_arr.shape[0])
+                    ]
+                    h_interferers_arr, _intf_ranks = project_interference_channels(
+                        h_interferers_arr,
+                        _h_own_proxies,
+                        max_rank=self.max_rank,
+                        rank_threshold=self.rank_threshold,
+                    )
+
+                # --- Precoding from MATLAB ---
+                if mat_w_dl is not None and mat_dl_rank is not None:
+                    _rank = int(np.asarray(mat_dl_rank).flatten()[i_ue])
+                    _rank = max(_rank, 1)
+                    # mat_w_dl[i_ue]: [BsAnt, max_rank, N_RB] → [N_RB, BsAnt, rank]
+                    _w_raw = mat_w_dl[i_ue][:, :_rank, :]  # [BsAnt, rank, N_RB]
+                    _w_dl = np.transpose(_w_raw, (2, 0, 1)).astype(np.complex64)  # [N_RB, BsAnt, rank]
+                else:
+                    from msg_embedding.phy_sim.precoding import compute_dl_precoding
+                    _bs_ant = h_ul_est.shape[2]
+                    _ue_ant = h_ul_est.shape[3]
+                    _max_r = min(4, _ue_ant, _bs_ant)
+                    _prec = compute_dl_precoding(h_ul_est, max_rank=_max_r)
+                    _w_dl = _prec.w_dl
+                    _rank = _prec.rank
+
+                # --- Pre-SINR from MATLAB (preferred) or Python fallback ---
+                _qr_pre_sinr_db: float | None = None
+                _qr_pre_sinr_per_rb: np.ndarray | None = None
+                if mat_pre_sinr is not None and mat_pre_sinr_rb is not None:
+                    _qr_pre_sinr_db = float(np.asarray(mat_pre_sinr).flatten()[i_ue])
+                    _qr_pre_sinr_per_rb = np.asarray(mat_pre_sinr_rb[i_ue]).astype(np.float32)
+                elif h_ul_ideal is not None and h_ul_est is not None:
+                    _sig_prb = np.mean(np.abs(h_ul_ideal) ** 2, axis=(0, 2, 3))
+                    _err_prb = np.mean(np.abs(h_ul_est - h_ul_ideal) ** 2, axis=(0, 2, 3))
+                    _ps_lin = _sig_prb / (_err_prb + 1e-30)
+                    _qr_pre_sinr_per_rb = np.clip(
+                        10.0 * np.log10(_ps_lin + 1e-30), -50.0, 50.0
+                    ).astype(np.float32)
+                    _wb_s = float(np.mean(_sig_prb))
+                    _wb_e = float(np.mean(_err_prb))
+                    _qr_pre_sinr_db = float(np.clip(
+                        10.0 * math.log10(_wb_s / (_wb_e + 1e-30) + 1e-30), -50.0, 50.0
+                    ))
+
+                _serving_cell_id = sid_0
 
                 # SRS frequency — accumulate full hopping cycle
                 from msg_embedding.ref_signals.srs import srs_accumulated_rb_indices as _srs_rb_fn
@@ -361,10 +552,13 @@ class QuadrigaRealSource(DataSource):
                 _srs_sym = _ul_syms[-1] if _ul_syms else 0
                 _srs_rb_idx = _srs_rb_fn(self._srs_resource_cfg, yielded, _srs_sym, self._num_rb)
 
+                _est_pathloss_dB = ptx_dBm - noise_dBm - snr_dB
+
                 sample_meta = {
                     "num_cells": K,
                     "isd_m": self.isd_m,
                     "scenario": self.scenario,
+                    "pathloss_dB": _est_pathloss_dB,
                     "carrier_freq_hz": self.carrier_freq_hz,
                     "bandwidth_hz": self.bandwidth_hz,
                     "subcarrier_spacing": self.subcarrier_spacing,
@@ -383,35 +577,27 @@ class QuadrigaRealSource(DataSource):
                     "srs_rb_indices": _srs_rb_idx.tolist(),
                     "shard": shard_num,
                     "ue_idx": i_ue,
+                    "bs_panel": [self.bs_panel_h, self.bs_panel_v, self.bs_panel_p],
+                    "ue_panel": [self.ue_panel_h, self.ue_panel_v, self.ue_panel_p],
+                    "xpd_db": self.xpd_db,
+                    "ue_tx_power_dbm": self.ue_tx_power_dbm,
+                    "tx_power_dbm": ptx_dBm,
+                    "dl_rank": _rank,
+                    "w_dl_shape": list(_w_dl.shape),
+                    "w_dl": _w_dl,
+                    "interferer_precoding_applied": self.apply_interferer_precoding,
+                    "store_interferer_channels": self.store_interferer_channels,
                 }
-                # Precoding data will be added below after computation
+                if _intf_ranks is not None:
+                    _sample_meta["interferer_ranks"] = _intf_ranks
 
-                # -- Respect channel_est_mode: ideal means no estimation error --
                 if self.channel_est_mode == "ideal":
                     h_ul_est = h_ul_ideal.copy()
 
-                # -- DL precoding weights from UL estimate --
-                from msg_embedding.phy_sim.precoding import compute_dl_precoding
-                _bs_ant = h_ul_est.shape[2]
-                _ue_ant = h_ul_est.shape[3]
-                _max_r = min(4, _ue_ant, _bs_ant)
-                _prec = compute_dl_precoding(h_ul_est, max_rank=_max_r)
-                _w_dl = _prec.w_dl
-                _rank = _prec.rank
-                sample_meta["dl_rank"] = _rank
-                sample_meta["w_dl_shape"] = list(_w_dl.shape)
-                sample_meta["w_dl"] = _w_dl
-
-                # -- Direction handling via TDD reciprocity --
-                # MATLAB only produces UL (SRS) channels. For DL/BOTH we derive
-                # via H_DL = conj(H_UL) — no antenna transpose because data is
-                # already stored in contract convention [T, RB, BS_ant, UE_ant].
                 est_mode_out: ChannelEstMode = "ls_linear"
-                if self.channel_est_mode in ("ideal", "ls_linear", "ls_mmse"):
+                if self.channel_est_mode in ("ideal", "ls_linear", "ls_mmse", "ls_hop_concat"):
                     est_mode_out = self.channel_est_mode  # type: ignore[assignment]
 
-                # Use MATLAB DL estimated channel when available,
-                # otherwise fall back to TDD reciprocity conj(H_UL).
                 h_dl_ideal = np.conj(h_ul_ideal)
                 if has_dl_data and Hf_dl_est_mat is not None:
                     h_dl_est_raw = np.transpose(Hf_dl_est_mat[i_ue], (3, 2, 0, 1))
@@ -421,82 +607,101 @@ class QuadrigaRealSource(DataSource):
                 else:
                     h_dl_est = np.conj(h_ul_est)
 
+                # -- UL SNR/SINR from UE TX power --
+                _tx_pwr_offset = ptx_dBm - self.ue_tx_power_dbm
+                _ul_snr = float(np.clip(snr_dB - _tx_pwr_offset, -50, 50))
+                _ul_sinr = float(np.clip(
+                    -10.0 * math.log10(
+                        10.0 ** (-_ul_snr / 10.0) + 10.0 ** (-sir_dB / 10.0)
+                    ), -50, 50
+                ))
+
+                # Common fields for all link modes
+                # Interference signal (derived from h_interferers)
+                _interference_signal: np.ndarray | None = None
+                if h_interferers_arr is not None:
+                    _intf_sum = np.sum(h_interferers_arr, axis=0)  # [T, RB, BS, UE]
+                    _interference_signal = np.sum(_intf_sum, axis=2).astype(np.complex64)  # [T, RB, UE]
+
+                # UL/DL SIR from MATLAB
+                _ul_sir = float(np.nan_to_num(np.clip(sir_dB, -50, 50), nan=50.0)) if K > 1 else None
+                _dl_sir_val = float(mat_dl_sir[i_ue]) if mat_dl_sir is not None and i_ue < len(mat_dl_sir) else _ul_sir
+
+                _common = dict(
+                    h_interferers=(
+                        h_interferers_arr.astype(np.complex64)
+                        if h_interferers_arr is not None and self.store_interferer_channels
+                        else None
+                    ),
+                    interference_signal=_interference_signal if self.store_interferer_channels else None,
+                    noise_power_dBm=noise_dBm,
+                    ssb_rsrp_dBm=ssb_rsrp_list,
+                    ssb_rsrq_dB=ssb_rsrq_list,
+                    ssb_sinr_dB=ssb_sinr_list,
+                    ssb_best_beam_idx=ssb_beam_list,
+                    ssb_pcis=ssb_pcis_list,
+                    channel_est_mode=est_mode_out,
+                    serving_cell_id=_serving_cell_id,
+                    ue_position=ue_p,
+                    channel_model=self.channel_model,
+                    tdd_pattern=self.tdd_pattern_name,
+                    num_interfering_ues=self.num_interfering_ues,
+                    h_ul_true=h_ul_ideal.astype(np.complex64),
+                    h_ul_est=h_ul_est.astype(np.complex64),
+                    h_dl_true=h_dl_ideal.astype(np.complex64),
+                    h_dl_est=h_dl_est.astype(np.complex64),
+                    ul_sir_dB=_ul_sir,
+                    dl_sir_dB=_dl_sir_val,
+                    ssb_rsrp_true_dBm=ssb_rsrp_list,
+                    ssb_sinr_true_dB=ssb_sinr_list,
+                    ul_pre_sinr_dB=_qr_pre_sinr_db,
+                    ul_pre_sinr_per_rb=_qr_pre_sinr_per_rb,
+                    ul_snr_dB=_ul_snr,
+                    ul_sinr_dB=_ul_sinr,
+                    w_dl=_w_dl,
+                    dl_rank=_rank,
+                    source="quadriga_real",
+                    sample_id=str(uuid.uuid4()),
+                    created_at=datetime.now(timezone.utc),
+                    meta=sample_meta,
+                )
+
                 if self.link == "BOTH":
                     _dl_sinr = float(mat_dl_sinr[i_ue]) if mat_dl_sinr is not None else sinr_dB
                     _dl_sir = float(mat_dl_sir[i_ue]) if mat_dl_sir is not None else sir_dB
                     yield ChannelSample(
                         h_serving_true=h_dl_ideal.astype(np.complex64),
                         h_serving_est=h_dl_est.astype(np.complex64),
-                        h_interferers=None,
-                        noise_power_dBm=noise_dBm,
                         snr_dB=snr_dB,
                         sir_dB=_dl_sir,
                         sinr_dB=_dl_sinr,
-                        ssb_rsrp_dBm=ssb_rsrp_list,
                         link="DL",
-                        channel_est_mode=est_mode_out,
-                        serving_cell_id=0,
-                        ue_position=ue_p,
-                        tdd_pattern=self.tdd_pattern_name,
                         link_pairing="paired",
-                        h_ul_true=h_ul_ideal.astype(np.complex64),
-                        h_ul_est=h_ul_est.astype(np.complex64),
-                        h_dl_true=h_dl_ideal.astype(np.complex64),
-                        h_dl_est=h_dl_est.astype(np.complex64),
-                        w_dl=_w_dl,
-                        dl_rank=_rank,
-                        source="quadriga_real",
-                        sample_id=str(uuid.uuid4()),
-                        created_at=datetime.now(timezone.utc),
-                        meta=sample_meta,
+                        **_common,
                     )
                 elif self.link == "DL":
                     yield ChannelSample(
                         h_serving_true=h_dl_ideal.astype(np.complex64),
                         h_serving_est=h_dl_est.astype(np.complex64),
-                        h_interferers=None,
-                        noise_power_dBm=noise_dBm,
                         snr_dB=snr_dB,
                         sir_dB=sir_dB,
                         sinr_dB=sinr_dB,
-                        ssb_rsrp_dBm=ssb_rsrp_list,
                         link="DL",
-                        channel_est_mode=est_mode_out,
-                        serving_cell_id=0,
-                        ue_position=ue_p,
-                        tdd_pattern=self.tdd_pattern_name,
-                        w_dl=_w_dl,
-                        dl_rank=_rank,
-                        source="quadriga_real",
-                        sample_id=str(uuid.uuid4()),
-                        created_at=datetime.now(timezone.utc),
-                        meta=sample_meta,
+                        **_common,
                     )
                 else:
                     yield ChannelSample(
                         h_serving_true=h_ul_ideal.astype(np.complex64),
                         h_serving_est=h_ul_est.astype(np.complex64),
-                        h_interferers=None,
-                        noise_power_dBm=noise_dBm,
                         snr_dB=snr_dB,
                         sir_dB=sir_dB,
                         sinr_dB=sinr_dB,
-                        ssb_rsrp_dBm=ssb_rsrp_list,
                         link="UL",
-                        channel_est_mode=est_mode_out,
-                        serving_cell_id=0,
-                        ue_position=ue_p,
-                        tdd_pattern=self.tdd_pattern_name,
-                        w_dl=_w_dl,
-                        dl_rank=_rank,
-                        source="quadriga_real",
-                        sample_id=str(uuid.uuid4()),
-                        created_at=datetime.now(timezone.utc),
-                        meta=sample_meta,
+                        **_common,
                     )
                 yielded += 1
 
-            del Hf_est, Hf_ideal, d
+            del Hf_est, Hf_ideal, Hf_all, d
             gc.collect()
 
     def iter_samples(self) -> Iterator[ChannelSample]:
@@ -545,6 +750,22 @@ class QuadrigaRealSource(DataSource):
             "srs_n_rrc": self.srs_n_rrc,
             "srs_b_hop": self.srs_b_hop,
             "num_interfering_ues": self.num_interfering_ues,
+            "bs_panel": [self.bs_panel_h, self.bs_panel_v, self.bs_panel_p],
+            "ue_panel": [self.ue_panel_h, self.ue_panel_v, self.ue_panel_p],
+            "xpd_db": self.xpd_db,
+            "ue_tx_power_dbm": self.ue_tx_power_dbm,
+            "topology_layout": self.topology_layout,
+            "sectors_per_site": self.sectors_per_site,
+            "track_offset_m": self.track_offset_m,
+            "hypercell_size": self.hypercell_size,
+            "ue_distribution": self.ue_distribution,
+            "channel_model": self.channel_model,
+            "noise_figure_db": self.noise_figure_db,
+            "mobility_mode": self.mobility_mode,
+            "ue_speed_kmh": self.ue_speed_kmh,
+            "sample_interval_s": self.sample_interval_s,
+            "train_penetration_loss_db": self.train_penetration_loss_db,
+            "num_ssb_beams": self.num_ssb_beams,
         }
 
 

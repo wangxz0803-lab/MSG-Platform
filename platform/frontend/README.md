@@ -1,7 +1,7 @@
-# MSG-Embedding Frontend
+# ChannelHub Frontend
 
-React + TypeScript + Ant Design + React Query + Plotly web UI for the MSG-Embedding
-research platform. Talks to the FastAPI backend at `http://localhost:8000` via the
+React + TypeScript + Ant Design + React Query + Plotly web UI for the ChannelHub
+信道数据工场 platform. Talks to the FastAPI backend at `http://localhost:8000` via the
 REST API described in Phase 6.3.
 
 ## Prerequisites
@@ -22,7 +22,7 @@ cp .env.example .env      # override VITE_API_BASE_URL if the backend is elsewhe
 
 | Command            | Description                                         |
 | ------------------ | --------------------------------------------------- |
-| `npm run dev`      | Start Vite dev server on http://localhost:5173      |
+| `npm run dev`      | Start Vite dev server on http://localhost:5175      |
 | `npm run build`    | Typecheck + production build to `dist/`             |
 | `npm run preview`  | Preview production build locally                    |
 | `npm run test`     | Run Vitest suite                                    |

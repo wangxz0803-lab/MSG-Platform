@@ -8,7 +8,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 JobType = Literal[
-    "simulate", "convert", "bridge", "train", "eval", "infer", "export", "report"
+    "simulate", "convert", "bridge", "eval", "infer", "export", "report",
+    "dataset_export",
 ]
 JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 

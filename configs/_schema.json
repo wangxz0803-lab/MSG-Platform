@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "title": "MSG-Embedding Configuration",
+  "title": "ChannelHub Configuration",
   "properties": {
     "project": {
       "type": "object",

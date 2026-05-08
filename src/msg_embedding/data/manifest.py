@@ -1,4 +1,4 @@
-"""Parquet-backed manifest for the MSG-Embedding data pipeline.
+"""Parquet-backed manifest for the ChannelHub data pipeline.
 
 The manifest is the single source of truth about which samples have been
 materialised, where they live on disk, what stage of the pipeline they are in
@@ -19,6 +19,7 @@ integration consumes these columns without requiring a schema migration.
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -178,27 +179,8 @@ class Manifest:
         return len(self._df)
 
     # ------------------------------------------------------------------
-    # Mutations
+    # Mutations (append is defined below, after split locking)
     # ------------------------------------------------------------------
-    def append(self, rows: Iterable[dict[str, Any]]) -> None:
-        """Append ``rows`` to the manifest, silently skipping known uuids."""
-        rows = list(rows)
-        if not rows:
-            return
-        now = datetime.now(timezone.utc)
-        coerced = [_coerce_row(r, now) for r in rows]
-        existing = set(self._df["uuid"].dropna().astype(str).tolist())
-        fresh = [r for r in coerced if r["uuid"] not in existing]
-        if not fresh:
-            return
-        new_df = pd.DataFrame(fresh, columns=COLUMNS)
-        new_df = _coerce_frame(new_df)
-        if len(self._df) == 0:
-            self._df = new_df
-        else:
-            self._df = pd.concat([self._df, new_df], ignore_index=True)
-        self._df = _coerce_frame(self._df)
-
     def update(self, uuid: str, **fields: Any) -> None:
         """Patch fields on the row identified by ``uuid``.
 
@@ -277,8 +259,85 @@ class Manifest:
             conn.commit()
 
     # ------------------------------------------------------------------
-    # Splitting
+    # Split locking (for fixed test sets)
     # ------------------------------------------------------------------
+    @property
+    def _split_meta_path(self) -> Path:
+        return self.path.with_name(self.path.stem + "_split_meta.json")
+
+    def _load_split_meta(self) -> dict[str, Any]:
+        if self._split_meta_path.exists():
+            return json.loads(self._split_meta_path.read_text(encoding="utf-8"))
+        return {}
+
+    def _save_split_meta(self, meta: dict[str, Any]) -> None:
+        self._split_meta_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._split_meta_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(self._split_meta_path)
+
+    @property
+    def is_split_locked(self) -> bool:
+        return bool(self._load_split_meta().get("locked", False))
+
+    @property
+    def split_version(self) -> int:
+        return int(self._load_split_meta().get("version", 0))
+
+    def get_split_info(self) -> dict[str, Any]:
+        """Return full split metadata including lock status, version, counts."""
+        meta = self._load_split_meta()
+        counts = {}
+        if len(self._df) > 0 and "split" in self._df.columns:
+            for s in ("train", "val", "test", "unassigned"):
+                counts[s] = int((self._df["split"] == s).sum())
+        return {
+            "locked": meta.get("locked", False),
+            "version": meta.get("version", 0),
+            "strategy": meta.get("strategy"),
+            "seed": meta.get("seed"),
+            "ratios": meta.get("ratios"),
+            "locked_at": meta.get("locked_at"),
+            "locked_test_uuids": meta.get("locked_test_uuids_count", 0),
+            "counts": counts,
+        }
+
+    def lock_split(self) -> dict[str, Any]:
+        """Lock the current split — test/val sets become immutable.
+
+        After locking:
+        - ``compute_split`` raises if called again.
+        - ``append`` auto-assigns new rows to ``"train"``.
+        - The test/val UUID sets are recorded in the sidecar file.
+        """
+        if self.is_split_locked:
+            raise RuntimeError("split is already locked")
+
+        n_test = int((self._df["split"] == "test").sum())
+        n_val = int((self._df["split"] == "val").sum())
+        if n_test == 0 and n_val == 0:
+            raise ValueError("no test/val rows to lock — call compute_split first")
+
+        test_uuids = self._df.loc[self._df["split"] == "test", "uuid"].dropna().tolist()
+        val_uuids = self._df.loc[self._df["split"] == "val", "uuid"].dropna().tolist()
+
+        meta = self._load_split_meta()
+        meta["locked"] = True
+        meta["version"] = meta.get("version", 0) + 1
+        meta["locked_at"] = datetime.now(timezone.utc).isoformat()
+        meta["locked_test_uuids"] = test_uuids
+        meta["locked_val_uuids"] = val_uuids
+        meta["locked_test_uuids_count"] = len(test_uuids)
+        meta["locked_val_uuids_count"] = len(val_uuids)
+        self._save_split_meta(meta)
+        return self.get_split_info()
+
+    def unlock_split(self) -> None:
+        """Unlock the split (admin operation). All rows remain as-is."""
+        meta = self._load_split_meta()
+        meta["locked"] = False
+        self._save_split_meta(meta)
+
     def compute_split(
         self,
         strategy: SplitStrategy = "random",
@@ -287,19 +346,13 @@ class Manifest:
     ) -> None:
         """Assign train/val/test labels to every row according to ``strategy``.
 
-        Parameters
-        ----------
-        strategy :
-            * ``"random"`` — uniform random per-row split.
-            * ``"by_position"`` — group by quantised ``(ue_x, ue_y)`` cell so
-              all samples at the same location land in the same split.
-            * ``"by_beam"`` — group by ``serving_cell_id`` so a whole beam is
-              entirely train / val / test.
-        seed :
-            RNG seed for deterministic splits.
-        ratios :
-            ``(train, val, test)`` proportions. Must sum to ~1.
+        If the split is locked, only ``"unassigned"`` rows are assigned to
+        ``"train"`` — test/val sets are never changed.
         """
+        if self.is_split_locked:
+            self._assign_unassigned_to_train()
+            return
+
         if len(self._df) == 0:
             return
         if abs(sum(ratios) - 1.0) > 1e-6:
@@ -314,7 +367,6 @@ class Manifest:
         elif strategy == "by_position":
             xs = self._df["ue_x"].fillna(0.0).to_numpy(dtype=float)
             ys = self._df["ue_y"].fillna(0.0).to_numpy(dtype=float)
-            # Quantise to 1-metre cells.
             group_labels = np.array(
                 [f"{int(round(x))}:{int(round(y))}" for x, y in zip(xs, ys, strict=False)]
             )
@@ -340,9 +392,58 @@ class Manifest:
                 splits.append("val")
             else:
                 splits.append("test")
+
         self._df["split"] = pd.Series(splits, dtype="string")
         self._df["updated_at"] = _strip_tz(datetime.now(timezone.utc))
         self._df = _coerce_frame(self._df)
+
+        meta = self._load_split_meta()
+        meta["version"] = meta.get("version", 0) + 1
+        meta["strategy"] = strategy
+        meta["seed"] = seed
+        meta["ratios"] = list(ratios)
+        meta["computed_at"] = datetime.now(timezone.utc).isoformat()
+        self._save_split_meta(meta)
+
+    def _assign_unassigned_to_train(self) -> None:
+        """Auto-assign unassigned rows to train (used when split is locked)."""
+        mask = self._df["split"] == "unassigned"
+        if mask.any():
+            self._df.loc[mask, "split"] = "train"
+            self._df.loc[mask, "updated_at"] = _strip_tz(datetime.now(timezone.utc))
+            self._df = _coerce_frame(self._df)
+
+    def append(self, rows: Iterable[dict[str, Any]]) -> None:
+        """Append ``rows`` to the manifest, silently skipping known uuids.
+
+        If the split is locked, new rows are automatically assigned to train.
+        """
+        rows = list(rows)
+        if not rows:
+            return
+        now = datetime.now(timezone.utc)
+        coerced = [_coerce_row(r, now) for r in rows]
+        existing = set(self._df["uuid"].dropna().astype(str).tolist())
+        fresh = [r for r in coerced if r["uuid"] not in existing]
+        if not fresh:
+            return
+
+        if self.is_split_locked:
+            for r in fresh:
+                if r.get("split") in (None, "unassigned"):
+                    r["split"] = "train"
+
+        new_df = pd.DataFrame(fresh, columns=COLUMNS)
+        new_df = _coerce_frame(new_df)
+        if len(self._df) == 0:
+            self._df = new_df
+        else:
+            self._df = pd.concat([self._df, new_df], ignore_index=True)
+        self._df = _coerce_frame(self._df)
+
+    def get_split_uuids(self, split: str) -> list[str]:
+        """Return all UUIDs belonging to the given split."""
+        return self._df.loc[self._df["split"] == split, "uuid"].dropna().tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -366,4 +467,7 @@ __all__ = [
     "Manifest",
     "SplitStrategy",
     "compute_content_hash",
+    "SPLIT_META_VERSION",
 ]
+
+SPLIT_META_VERSION = 1

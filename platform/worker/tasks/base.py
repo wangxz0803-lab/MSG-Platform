@@ -31,12 +31,13 @@ _RUN_ID_RE = re.compile(r"^\[run_id\]\s+(.+)\s*$")
 _SCRIPT_NAMES: dict[str, str] = {
     "convert": "run_convert.py",
     "bridge": "run_bridge.py",
-    "train": "run_train.py",
+
     "eval": "run_eval.py",
     "infer": "run_infer.py",
     "export": "run_export.py",
     "report": "run_report.py",
     "simulate": "run_simulate.py",
+    "dataset_export": "run_dataset_export.py",
 }
 
 
@@ -100,18 +101,7 @@ def build_command(
     world_size = _get_ddp_world_size(overrides)
     hydra_tokens = _flatten_overrides(overrides)
 
-    if task_type == "train" and world_size > 1:
-        cmd = [
-            python_exe,
-            "-m",
-            "torch.distributed.run",
-            "--standalone",
-            f"--nproc_per_node={world_size}",
-            str(script_path),
-            *hydra_tokens,
-        ]
-    else:
-        cmd = [python_exe, str(script_path), *hydra_tokens]
+    cmd = [python_exe, str(script_path), *hydra_tokens]
     return cmd
 
 

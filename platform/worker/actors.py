@@ -35,11 +35,6 @@ def run_bridge_job(job_id: str, overrides: dict[str, Any] | None = None) -> str:
 
 
 @dramatiq.actor(max_retries=2, time_limit=_TIME_LIMIT_MS, queue_name=_QUEUE)
-def run_train_job(job_id: str, overrides: dict[str, Any] | None = None) -> str:
-    return TaskRunner(job_id, "train", overrides).run()
-
-
-@dramatiq.actor(max_retries=2, time_limit=_TIME_LIMIT_MS, queue_name=_QUEUE)
 def run_eval_job(job_id: str, overrides: dict[str, Any] | None = None) -> str:
     return TaskRunner(job_id, "eval", overrides).run()
 
@@ -67,7 +62,6 @@ def run_simulate_job(job_id: str, overrides: dict[str, Any] | None = None) -> st
 ACTORS: dict[str, dramatiq.Actor] = {
     "convert": run_convert_job,
     "bridge": run_bridge_job,
-    "train": run_train_job,
     "eval": run_eval_job,
     "infer": run_infer_job,
     "export": run_export_job,
@@ -94,5 +88,4 @@ __all__ = [
     "run_infer_job",
     "run_report_job",
     "run_simulate_job",
-    "run_train_job",
 ]

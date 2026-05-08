@@ -29,7 +29,7 @@ import numpy as np
 # Public API
 # ---------------------------------------------------------------------------
 
-MOBILITY_MODES = ("static", "linear", "random_walk", "random_waypoint")
+MOBILITY_MODES = ("static", "linear", "random_walk", "random_waypoint", "track")
 
 
 def generate_trajectory(
@@ -93,10 +93,15 @@ def generate_trajectory(
             v_min_kmh=float(kwargs.get("v_min_kmh", speed_kmh * 0.3)),
             v_max_kmh=float(kwargs.get("v_max_kmh", speed_kmh * 1.5)),
         )
+    elif mode == "track":
+        track_waypoints = kwargs.get("track_waypoints", None)
+        if track_waypoints is None:
+            raise ValueError("track mode requires 'track_waypoints' kwarg: [N, 2/3] array of XY(Z) coords")
+        positions = _track(start, speed_ms, num_steps, dt_s, np.asarray(track_waypoints, dtype=np.float64))
     else:
         positions = _static(start, num_steps)
 
-    if boundary_radius_m is not None and boundary_radius_m > 0:
+    if mode != "track" and boundary_radius_m is not None and boundary_radius_m > 0:
         _enforce_boundary(positions, bc, boundary_radius_m)
 
     return positions
@@ -264,6 +269,116 @@ def _random_point_in_circle(
     r = radius * np.sqrt(rng.uniform())
     theta = rng.uniform(0, 2 * np.pi)
     return np.array([center[0] + r * np.cos(theta), center[1] + r * np.sin(theta)])
+
+
+def _track(
+    start: np.ndarray,
+    speed_ms: float,
+    num_steps: int,
+    dt_s: float,
+    waypoints: np.ndarray,
+) -> np.ndarray:
+    """Fixed-path trajectory along a sequence of waypoints (e.g. rail track).
+
+    The UE moves at constant *speed_ms* along the polyline defined by
+    *waypoints*. If it reaches the last waypoint before *num_steps* is
+    exhausted, it reverses direction (ping-pong) and continues.
+
+    *start* is ignored for XY — the UE always begins at waypoints[0].
+    The Z coordinate is taken from *start*.
+    """
+    if waypoints.ndim == 1:
+        waypoints = waypoints.reshape(1, -1)
+    wp_2d = waypoints[:, :2]
+    z = start[2]
+
+    segments = np.diff(wp_2d, axis=0)
+    seg_lens = np.linalg.norm(segments, axis=1)
+    seg_lens = np.maximum(seg_lens, 1e-6)
+    seg_dirs = segments / seg_lens[:, None]
+
+    positions = np.zeros((num_steps, 3), dtype=np.float64)
+    positions[0] = [wp_2d[0, 0], wp_2d[0, 1], z]
+
+    seg_idx = 0
+    dist_in_seg = 0.0
+    direction = 1
+    n_segs = len(seg_lens)
+
+    for i in range(1, num_steps):
+        step_remaining = speed_ms * dt_s
+        cur_x, cur_y = positions[i - 1, 0], positions[i - 1, 1]
+
+        while step_remaining > 1e-9:
+            if seg_idx < 0 or seg_idx >= n_segs:
+                break
+            remaining_in_seg = seg_lens[seg_idx] - dist_in_seg if direction == 1 else dist_in_seg
+            if step_remaining <= remaining_in_seg:
+                dist_in_seg += step_remaining * direction
+                d = seg_dirs[seg_idx]
+                cur_x = wp_2d[seg_idx, 0] + d[0] * dist_in_seg
+                cur_y = wp_2d[seg_idx, 1] + d[1] * dist_in_seg
+                step_remaining = 0.0
+            else:
+                step_remaining -= remaining_in_seg
+                if direction == 1:
+                    seg_idx += 1
+                    dist_in_seg = 0.0
+                    if seg_idx >= n_segs:
+                        direction = -1
+                        seg_idx = n_segs - 1
+                        dist_in_seg = seg_lens[seg_idx]
+                else:
+                    seg_idx -= 1
+                    if seg_idx < 0:
+                        direction = 1
+                        seg_idx = 0
+                        dist_in_seg = 0.0
+                    else:
+                        dist_in_seg = seg_lens[seg_idx]
+
+        positions[i] = [cur_x, cur_y, z]
+
+    return positions
+
+
+def generate_train_positions(
+    base_trajectory: np.ndarray,
+    num_ues: int,
+    rng: np.random.Generator,
+    train_length_m: float = 400.0,
+    train_width_m: float = 3.4,
+) -> np.ndarray:
+    """Compute per-UE positions for passengers riding a train.
+
+    Each UE gets a fixed random offset within the train body.
+    The train moves along *base_trajectory* (the train center).
+
+    Returns shape ``[num_ues, num_steps, 3]``.
+    """
+    num_steps = base_trajectory.shape[0]
+    half_len = train_length_m / 2
+    half_wid = train_width_m / 2
+
+    offsets_along = rng.uniform(-half_len, half_len, size=num_ues)
+    offsets_perp = rng.uniform(-half_wid, half_wid, size=num_ues)
+
+    diffs = np.diff(base_trajectory[:, :2], axis=0)
+    dirs = np.zeros_like(base_trajectory[:, :2])
+    norms = np.linalg.norm(diffs, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-9)
+    dirs[1:] = diffs / norms
+    dirs[0] = dirs[1]
+
+    perp = np.stack([-dirs[:, 1], dirs[:, 0]], axis=-1)
+
+    all_positions = np.zeros((num_ues, num_steps, 3), dtype=np.float64)
+    for u in range(num_ues):
+        all_positions[u, :, 0] = base_trajectory[:, 0] + offsets_along[u] * dirs[:, 0] + offsets_perp[u] * perp[:, 0]
+        all_positions[u, :, 1] = base_trajectory[:, 1] + offsets_along[u] * dirs[:, 1] + offsets_perp[u] * perp[:, 1]
+        all_positions[u, :, 2] = base_trajectory[:, 2]
+
+    return all_positions
 
 
 def _enforce_boundary(

@@ -1,6 +1,6 @@
-"""MSG-Embedding worker package.
+"""ChannelHub worker package.
 
-A Dramatiq + Redis task queue that executes MSG training/eval/inference
+A thread-based task queue that executes channel data collection/eval/inference
 pipelines as subprocesses of the Hydra entry points under ``scripts/``.
 """
 

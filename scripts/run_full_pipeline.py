@@ -145,7 +145,7 @@ def _compute_statistics(samples: list[ChannelSample]) -> dict:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("MSG-Embedding Full Pipeline")
+    print("ChannelHub Full Pipeline")
     print("=" * 60)
 
     sources = {

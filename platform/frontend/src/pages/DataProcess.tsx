@@ -24,6 +24,8 @@ import {
   ArrowRightOutlined,
   ToolOutlined,
   ThunderboltOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { useDatasets, useCreateJob } from '@/api/queries';
@@ -244,6 +246,94 @@ export default function DataProcess() {
             <Tag color="blue">输出：16 Tokens + 8 Gates (.pt)</Tag>
           </Space>
         </div>
+      </Card>
+
+      {/* Dataset Stage Overview */}
+      <Card title="数据集处理状态" size="small" style={{ marginBottom: 24 }}>
+        {datasetsLoading ? (
+          <Text type="secondary">加载中...</Text>
+        ) : !datasetsData?.items?.length ? (
+          <Alert type="info" showIcon message="暂无数据集，请先在「数据采集」页面生成原始数据" />
+        ) : (
+          <Table
+            dataSource={datasetsData.items.map((ds) => ({ key: ds.source, ...ds }))}
+            pagination={false}
+            size="small"
+            bordered
+            columns={[
+              {
+                title: '数据源',
+                dataIndex: 'source',
+                key: 'source',
+                width: 150,
+                render: (v: string) => <Text strong>{v}</Text>,
+              },
+              {
+                title: '总样本数',
+                dataIndex: 'count',
+                key: 'count',
+                width: 100,
+                align: 'center',
+              },
+              {
+                title: '原始 (raw)',
+                key: 'raw',
+                width: 120,
+                align: 'center',
+                render: (_: unknown, record: any) => {
+                  const raw = (record.stage_counts?.raw ?? 0) as number;
+                  return raw > 0 ? (
+                    <Tag icon={<ClockCircleOutlined />} color="default">{raw}</Tag>
+                  ) : (
+                    <Text type="secondary">0</Text>
+                  );
+                },
+              },
+              {
+                title: '已处理 (bridged)',
+                key: 'bridged',
+                width: 140,
+                align: 'center',
+                render: (_: unknown, record: any) => {
+                  const bridged = (record.stage_counts?.bridged ?? 0) as number;
+                  return bridged > 0 ? (
+                    <Tag icon={<CheckCircleOutlined />} color="success">{bridged}</Tag>
+                  ) : (
+                    <Text type="secondary">0</Text>
+                  );
+                },
+              },
+              {
+                title: '处理进度',
+                key: 'progress',
+                render: (_: unknown, record: any) => {
+                  const bridged = (record.stage_counts?.bridged ?? 0) as number;
+                  const pct = record.count > 0 ? Math.round((bridged / record.count) * 100) : 0;
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{
+                        flex: 1,
+                        height: 8,
+                        borderRadius: 4,
+                        background: '#f0f0f0',
+                        overflow: 'hidden',
+                      }}>
+                        <div style={{
+                          width: `${pct}%`,
+                          height: '100%',
+                          borderRadius: 4,
+                          background: pct === 100 ? '#52c41a' : '#1677ff',
+                          transition: 'width 0.3s',
+                        }} />
+                      </div>
+                      <Text style={{ minWidth: 40, textAlign: 'right' }}>{pct}%</Text>
+                    </div>
+                  );
+                },
+              },
+            ]}
+          />
+        )}
       </Card>
 
       {/* Token Layout */}
